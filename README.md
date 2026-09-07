@@ -1,4 +1,4 @@
-# OpenCode Praefectus Fabrum
+# Praefectus OpenCode
 
 ## What This Package Does
 
@@ -50,12 +50,12 @@ keybindings to your Hyprland bindings file, for example
 `~/.config/hypr/bindings.conf`:
 
 ```ini
-bind = SUPER ALT, W, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state working
-bind = SUPER ALT, R, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state response
-bind = SUPER ALT, P, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state permission
-bind = SUPER ALT, I, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state idle
-bind = SUPER ALT, TAB, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-next
-bind = SUPER ALT SHIFT, TAB, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-previous
+bind = SUPER ALT, W, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state working
+bind = SUPER ALT, R, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state response
+bind = SUPER ALT, P, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state permission
+bind = SUPER ALT, I, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state idle
+bind = SUPER ALT, TAB, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-next
+bind = SUPER ALT SHIFT, TAB, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-previous
 ```
 
 The shortcuts are:
@@ -96,7 +96,7 @@ binding with the actual path to `bin/opencode-watch`.
 Install the Omarchy bar plugin:
 
 ```bash
-omarchy plugin add https://github.com/jcergolj/opencode-praefectus-fabrum.git --enable
+omarchy plugin add https://github.com/jcergolj/praefectus-opencode.git --enable
 ```
 
 The total and process-based idle counts work without the OpenCode status
@@ -106,8 +106,8 @@ bundled OpenCode plugin and restart OpenCode:
 ```bash
 mkdir -p ~/.config/opencode/plugins
 ln -sfn \
-  ~/.config/omarchy/plugins/opencode.praefectus-fabrum/opencode-plugin/index.js \
-  ~/.config/opencode/plugins/opencode-praefectus-fabrum.js
+  ~/.config/omarchy/plugins/praefectus.opencode/plugin/index.js \
+  ~/.config/opencode/plugins/praefectus-opencode.js
 ```
 
 The bridge writes per-process status records under `$XDG_RUNTIME_DIR`, or

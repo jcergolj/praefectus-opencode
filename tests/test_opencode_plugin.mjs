@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const pluginSource = await readFile(
-  new URL("../opencode-plugin/index.js", import.meta.url),
+  new URL("../plugin/index.js", import.meta.url),
   "utf8",
 );
 const plugin = await import(`data:text/javascript,${encodeURIComponent(pluginSource)}`);

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "opencode.praefectus-fabrum",
-  "name": "OpenCode Praefectus Fabrum",
+  "id": "praefectus.opencode",
+  "name": "Praefectus OpenCode",
   "version": "0.1.0",
   "author": "jcergolj",
   "license": "MIT",
@@ -15,7 +15,7 @@
     "displayName": "OpenCode",
     "description": "Live total, working, response, permission, and idle counts.",
     "category": "AI",
-    "aliases": ["opencode", "praefectus", "fabrum"],
+    "aliases": ["opencode", "praefectus"],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {

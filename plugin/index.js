@@ -1,5 +1,5 @@
 /*
- * OpenCode status bridge for the Praefectus Fabrum bar widget.
+ * OpenCode status bridge for the Praefectus OpenCode bar widget.
  *
  * OpenCode loads this file for every instance. It records the latest structured
  * session status in a per-process runtime file; the widget watcher reads those
@@ -12,7 +12,7 @@ import path from "node:path";
 
 const runtimeDir =
   process.env.XDG_RUNTIME_DIR || path.join(os.homedir(), ".cache");
-const statusDir = path.join(runtimeDir, "opencode-praefectus-fabrum");
+const statusDir = path.join(runtimeDir, "praefectus-opencode");
 const defaultProcessStartedAt = Date.now() / 1000 - process.uptime();
 
 function readProcessStartTicks(fileSystem = fs) {
@@ -627,6 +627,6 @@ export {
 };
 
 export default {
-  id: "opencode-praefectus-fabrum",
+  id: "praefectus-opencode",
   server,
 };

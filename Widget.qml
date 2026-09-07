@@ -9,8 +9,8 @@ import qs.Ui
 // Counts are clickable; the total count toggles the full session list.
 Panel {
   id: root
-  moduleName: "opencode.praefectus-fabrum"
-  ipcTarget: "opencode.praefectus-fabrum"
+  moduleName: "praefectus.opencode"
+  ipcTarget: "praefectus.opencode"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.barForeground : Color.foreground
@@ -267,7 +267,7 @@ Panel {
       notificationSummary: notificationSummary(eventType),
       notificationBody: notificationBody(eventType, session)
     })
-    if (!notificationProcess) console.warn("praefectus-fabrum", "could not create notification process")
+    if (!notificationProcess) console.warn("praefectus-opencode", "could not create notification process")
   }
 
   function notifyForTransitions(currentSessions) {
@@ -297,7 +297,7 @@ Panel {
         else notifyForTransitions(currentSessions)
       }
     } catch (parseError) {
-      console.warn("praefectus-fabrum", "bad state line", parseError)
+      console.warn("praefectus-opencode", "bad state line", parseError)
     }
   }
 
@@ -308,7 +308,7 @@ Panel {
     stdout: SplitParser { onRead: function(outputChunk) { root.parseState(outputChunk) } }
     stderr: SplitParser {
       onRead: function(outputChunk) {
-        if (String(outputChunk).trim() !== "") console.warn("praefectus-fabrum", String(outputChunk).trim())
+        if (String(outputChunk).trim() !== "") console.warn("praefectus-opencode", String(outputChunk).trim())
       }
     }
   }
@@ -348,7 +348,7 @@ Panel {
 
       stderr: SplitParser {
         onRead: function(outputChunk) {
-          if (String(outputChunk).trim() !== "") console.warn("praefectus-fabrum", String(outputChunk).trim())
+          if (String(outputChunk).trim() !== "") console.warn("praefectus-opencode", String(outputChunk).trim())
         }
       }
 
