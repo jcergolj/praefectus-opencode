@@ -69,7 +69,7 @@ Restart OpenCode after creating the link.
 
 Praefectus can focus sessions directly from Hyprland.
 
-Add these bindings to `~/.config/hypr/bindings.conf`:
+Add these bindings to `~/.config/hypr/bindings.lua`:
 
 ```ini
 bind = SUPER ALT, W, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state working
