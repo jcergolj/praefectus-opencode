@@ -1,144 +1,150 @@
 # Praefectus OpenCode
 
-## What This Package Does
+Keep track of all your OpenCode sessions directly from the Omarchy bar.
 
-OpenCode Praefectus Fabrum is an Omarchy bar widget for monitoring and
-switching between running OpenCode sessions.
+Praefectus shows which agents are **working**, **waiting for your response**, **waiting for permission**, or **idle** — and lets you jump straight to the relevant terminal or tmux pane.
 
-The widget shows compact live counts in the bar:
+![Praefectus OpenCode example](images/example.png)
+
+## Why?
+
+Running several OpenCode sessions at once gets difficult surprisingly quickly.
+
+Which one is still working?
+Which agent is waiting for permission?
+Which terminal needs your response?
+
+Praefectus gives you a small command center in your Omarchy bar:
 
 ```text
-total:working|response|permission|idle
+5:2|1|1|1
 ```
 
-- `total`: all top-level OpenCode processes currently running.
-- `working`: sessions currently working.
-- `response`: sessions waiting for a response.
-- `permission`: sessions waiting for permission.
-- `idle`: sessions currently idle.
+Where:
 
-The counts are clickable. Click the total to open the complete session list.
-Click a status count to open its filtered list. Click a session row to focus its
-terminal or tmux pane.
+* `5` — total OpenCode sessions
+* `2` — working
+* `1` — waiting for your response
+* `1` — waiting for permission
+* `1` — idle
 
-Expand a session row to see its latest context-window percentage when OpenCode
-provides model and token usage metadata.
+Click any counter to see the matching sessions, then click a session to focus its terminal or tmux pane.
 
-When the session list is open, expand `Settings` to toggle colored counter
-numbers and session notifications. Turn colored counters off to show every
-counter number in white. Session notifications are enabled by default and
-appear when a session needs attention or finishes. They close after 10 seconds
-by default; the timeout can be changed between 8 and 30 seconds. Clicking a
-notification focuses its session. These choices are saved in the widget
-configuration.
+## Features
 
-The widget watches live top-level `opencode` processes. Nested OpenCode
-processes created by subagents are ignored. A new process starts as idle until
-its status is reported.
+* Live status of all top-level OpenCode sessions
+* Working, response, permission and idle states
+* Clickable session lists
+* Jump directly to the terminal or tmux pane running a session
+* Cycle between sessions using keyboard shortcuts
+* Desktop notifications when an agent needs attention or finishes
+* Context-window usage when OpenCode exposes token metadata
+* Optional colored counters
+* Ignores nested OpenCode processes created by subagents
+* Does not scrape terminal output or read OpenCode's private storage
 
-## Why This Name
+## Installation
 
-*Praefectus fabrum* was a Roman title for an officer responsible for skilled
-craftsmen, engineers, and technical workers. OpenCode agents are modern
-technical workers, and this widget organizes their work and directs you to the
-session that needs attention.
+Install the Omarchy plugin:
+
+```bash
+omarchy plugin add https://github.com/jcergolj/praefectus-opencode.git --enable
+```
+
+The widget can immediately detect running OpenCode processes and idle sessions.
+
+For live `working`, `response`, and `permission` states, enable the bundled OpenCode status bridge:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+
+ln -sfn \
+  ~/.config/omarchy/plugins/praefectus.opencode/plugin/index.js \
+  ~/.config/opencode/plugins/praefectus-opencode.js
+```
+
+Restart OpenCode after creating the link.
 
 ## Keyboard Shortcuts
 
-The watcher provides a focus command for each session state. Add these
-keybindings to your Hyprland bindings file, for example
-`~/.config/hypr/bindings.conf`:
+Praefectus can focus sessions directly from Hyprland.
+
+Add these bindings to `~/.config/hypr/bindings.conf`:
 
 ```ini
 bind = SUPER ALT, W, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state working
 bind = SUPER ALT, R, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state response
 bind = SUPER ALT, P, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state permission
 bind = SUPER ALT, I, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state idle
+
 bind = SUPER ALT, TAB, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-next
 bind = SUPER ALT SHIFT, TAB, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-previous
 ```
 
-The shortcuts are:
-
-```text
-SUPER + ALT + W  focus a working session
-SUPER + ALT + R  focus a session waiting for a response
-SUPER + ALT + P  focus a session waiting for permission
-SUPER + ALT + I  focus an idle session
-SUPER + ALT + TAB          focus the next session, regardless of state
-SUPER + ALT + SHIFT + TAB  focus the previous session, regardless of state
-```
-
-Each state shortcut starts with the first matching session and repeated presses
-cycle forward. `SUPER + ALT + TAB` starts with the first tracked session, while
-`SUPER + ALT + SHIFT + TAB` starts with the last. Both shortcuts wrap around
-and include sessions in every state. Reload Hyprland after adding the bindings:
+Then reload Hyprland:
 
 ```bash
 hyprctl reload
 ```
 
-If the plugin was installed somewhere else, replace the plugin path in each
-binding with the actual path to `bin/opencode-watch`.
+### Default shortcuts
 
-## Prerequisites
+| Shortcut                    | Action                                 |
+| --------------------------- | -------------------------------------- |
+| `SUPER + ALT + W`           | Focus a working session                |
+| `SUPER + ALT + R`           | Focus a session waiting for a response |
+| `SUPER + ALT + P`           | Focus a session waiting for permission |
+| `SUPER + ALT + I`           | Focus an idle session                  |
+| `SUPER + ALT + TAB`         | Focus the next session                 |
+| `SUPER + ALT + SHIFT + TAB` | Focus the previous session             |
 
-- Omarchy with its bar and plugin support.
-- The `omarchy` command for installing the bar plugin.
-- OpenCode, if you want OpenCode sessions to be tracked.
-- Python 3. The watcher uses only the Python standard library.
-- Hyprland, for focusing OpenCode windows.
-- `tmux` is optional. It is used when an OpenCode session runs in a tmux pane.
-- No npm packages are required.
+Repeated presses cycle through matching sessions and wrap around.
 
-## Installation
+## Notifications
 
-Install the Omarchy bar plugin:
+Praefectus can notify you when an OpenCode session:
 
-```bash
-omarchy plugin add https://github.com/jcergolj/praefectus-opencode.git --enable
-```
+* needs your response
+* needs permission
+* finishes working
 
-The total and process-based idle counts work without the OpenCode status
-bridge. To receive live working, response, and permission states, link the
-bundled OpenCode plugin and restart OpenCode:
+Notifications are enabled by default.
 
-```bash
-mkdir -p ~/.config/opencode/plugins
-ln -sfn \
-  ~/.config/omarchy/plugins/praefectus.opencode/plugin/index.js \
-  ~/.config/opencode/plugins/praefectus-opencode.js
-```
+Clicking a notification focuses the corresponding session.
 
-The bridge writes per-process status records under `$XDG_RUNTIME_DIR`, or
-`~/.cache` when that variable is not set. The widget does not scrape terminal
-output or access OpenCode's private storage.
+The notification timeout can be configured between 8 and 30 seconds from the widget settings.
 
-Status records are matched to live processes using exact Linux process start
-ticks, avoiding differences between JavaScript and kernel epoch estimates.
-When ticks are unavailable (including records from older bridges), the watcher
-retains its five-second process-start timestamp tolerance.
+## How It Works
 
-## Watcher Architecture
+Praefectus watches top-level `opencode` processes running on the machine.
 
-The watcher is organized as a small Python package under `bin/opencode_watch`:
+The bundled OpenCode plugin publishes lightweight per-process status information. Status files are stored under `$XDG_RUNTIME_DIR`, falling back to `~/.cache` when necessary.
 
-- `domain.py`: session models and lifecycle state rules.
-- `sources.py`: Linux `/proc` and runtime status-file adapters.
-- `snapshots.py`: process collection and the QML snapshot contract.
-- `focus.py`: tmux, Hyprland, and focus-target adapters.
-- `cycling.py`: session selection and persistent focus cycling.
-- `cli.py`: dependency composition and command-line behavior.
+Praefectus does **not** scrape terminal output and does **not** access OpenCode's private storage.
 
-The `bin/opencode-watch` executable remains the only runtime entry point. Each
-adapter is injected through a small protocol, so collection and focus policy can
-be tested without a live desktop.
+Processes are matched using Linux process start ticks, which prevents stale status information from being associated with newly created processes reusing the same PID.
+
+## Why "Praefectus"?
+
+*Praefectus fabrum* was a Roman officer responsible for craftsmen, engineers and other technical workers.
+
+OpenCode agents are today's technical workers.
+
+Praefectus keeps an eye on them and tells you which one needs your attention.
 
 ## Tests
 
-Run the watcher and bridge tests from the repository root:
+Run the watcher tests:
 
 ```bash
 python3 -m unittest discover -s tests -v
+```
+
+Run the OpenCode bridge tests:
+
+```bash
 node --test tests/test_opencode_plugin.mjs
 ```
+
+## License
+MIT
