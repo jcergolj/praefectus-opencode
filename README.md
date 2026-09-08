@@ -65,6 +65,22 @@ ln -sfn \
 
 Restart OpenCode after creating the link.
 
+## Uninstall
+
+Remove the OpenCode status bridge:
+
+```bash
+rm ~/.config/opencode/plugins/praefectus-opencode.js
+```
+
+Remove the Omarchy plugin:
+
+```bash
+omarchy plugin remove praefectus.opencode
+```
+
+Restart OpenCode after removing the files.
+
 ## Keyboard Shortcuts
 
 Praefectus can focus sessions directly from Hyprland.
