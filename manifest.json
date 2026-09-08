@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "praefectus.opencode",
   "name": "Praefectus OpenCode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "jcergolj",
   "license": "MIT",
   "description": "Live OpenCode agent counts and session switching in the Omarchy bar.",
