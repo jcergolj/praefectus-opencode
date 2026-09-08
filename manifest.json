@@ -6,6 +6,7 @@
   "author": "jcergolj",
   "license": "MIT",
   "description": "Live OpenCode agent counts and session switching in the Omarchy bar.",
+  "preview": "preview.png",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
