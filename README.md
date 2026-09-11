@@ -53,21 +53,16 @@ omarchy plugin add https://github.com/jcergolj/praefectus-opencode.git --enable
 
 The widget can immediately detect running OpenCode processes and idle sessions.
 
-For live `working`, `response`, and `permission` states, enable the bundled OpenCode status bridge:
+When the widget is enabled, it automatically installs the bundled OpenCode
+status bridge through Omarchy's native process integration. The bridge is
+placed at `~/.config/opencode/plugins/praefectus-opencode.js` and is loaded by
+new OpenCode sessions.
 
-```bash
-mkdir -p ~/.config/opencode/plugins
-
-ln -sfn \
-  ~/.config/omarchy/plugins/praefectus.opencode/plugin/index.js \
-  ~/.config/opencode/plugins/praefectus-opencode.js
-```
-
-Restart OpenCode after creating the link.
+Restart already-running OpenCode sessions once after enabling the widget.
 
 ## Uninstall
 
-Remove the OpenCode status bridge:
+Remove the automatically installed OpenCode status bridge:
 
 ```bash
 rm ~/.config/opencode/plugins/praefectus-opencode.js

@@ -21,6 +21,9 @@ Panel {
   readonly property color idleColor: "#22c55e"
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string watcherPath: Qt.resolvedUrl("bin/opencode-watch").toString().replace(/^file:\/\//, "")
+  readonly property string statusBridgePath: Qt.resolvedUrl("plugin/index.js").toString().replace(/^file:\/\//, "")
+  readonly property string opencodePluginDirectory: Quickshell.env("HOME") + "/.config/opencode/plugins"
+  readonly property string opencodePluginPath: opencodePluginDirectory + "/praefectus-opencode.js"
   readonly property var emptySnapshot: ({
     counts: { sessions: 0, attention: 0, response: 0, permission: 0, idle: 0, working: 0 },
     sessions: []
@@ -299,6 +302,22 @@ Panel {
     } catch (parseError) {
       console.warn("praefectus-opencode", "bad state line", parseError)
     }
+  }
+
+  Process {
+    id: prepareOpenCodePluginDirectory
+    command: ["mkdir", "-p", root.opencodePluginDirectory]
+    running: true
+
+    onExited: function(exitCode, exitStatus) {
+      if (exitCode === 0) linkOpenCodeStatusBridge.running = true
+    }
+  }
+
+  Process {
+    id: linkOpenCodeStatusBridge
+    command: ["ln", "-sfn", root.statusBridgePath, root.opencodePluginPath]
+    running: false
   }
 
   Process {
