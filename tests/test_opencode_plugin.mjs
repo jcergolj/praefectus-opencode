@@ -83,10 +83,12 @@ test("lifecycle state machine enforces the complete transition matrix", () => {
 test("event mapper translates OpenCode events into domain states", () => {
   const stateMapper = new plugin.EventStateMapper();
 
-  assert.equal(
-    stateMapper.stateFor({ type: "session.status", properties: { status: "busy" } }),
-    plugin.SessionStatus.WORKING,
-  );
+  for (const status of ["busy", "retry", "working", "running", "generating", "streaming"]) {
+    assert.equal(
+      stateMapper.stateFor({ type: "session.status", properties: { status } }),
+      plugin.SessionStatus.WORKING,
+    );
+  }
   assert.equal(
     stateMapper.stateFor({ type: "session.status", properties: { status: { type: "idle" } } }),
     plugin.SessionStatus.IDLE,

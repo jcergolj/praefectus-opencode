@@ -255,7 +255,14 @@ class EventStateMapper {
     switch (event?.type) {
       case "session.status": {
         const status = this.statusType(event.properties || {});
-        if (status === "busy" || status === "retry") {
+        if (
+          status === "busy" ||
+          status === "retry" ||
+          status === "working" ||
+          status === "running" ||
+          status === "generating" ||
+          status === "streaming"
+        ) {
           return SessionStatus.WORKING;
         }
         if (status === "idle") return SessionStatus.IDLE;
