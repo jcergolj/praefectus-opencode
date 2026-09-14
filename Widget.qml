@@ -341,29 +341,23 @@ Panel {
       property string targetSourcePid: ""
       property string notificationSummary: ""
       property string notificationBody: ""
-      property bool actionHandled: false
 
       command: [
-        "notify-send",
-        "--wait",
-        "--transient",
-        "--action=default=Open",
-        "--expire-time",
-        String(root.notificationTimeoutMs),
+        "omarchy-notification-send",
         "--app-name",
         "OpenCode",
+        "--urgency",
+        "normal",
+        "--expire-time",
+        String(root.notificationTimeoutMs),
         notificationSummary,
-        notificationBody
+        notificationBody,
+        "--exec",
+        root.watcherPath,
+        "--focus",
+        targetSourcePid !== "" ? targetSourcePid : targetSessionId
       ]
       running: true
-
-      stdout: SplitParser {
-        onRead: function(outputChunk) {
-          if (String(outputChunk).trim() !== "default" || notificationProcess.actionHandled) return
-          notificationProcess.actionHandled = true
-          root.focusSession(notificationProcess.targetSessionId, notificationProcess.targetSourcePid)
-        }
-      }
 
       stderr: SplitParser {
         onRead: function(outputChunk) {
