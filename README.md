@@ -8,7 +8,7 @@ Praefectus shows which agents are **working**, **waiting for your response**, **
 
 ## Why?
 
-Running several OpenCode sessions at once gets difficult surprisingly quickly.
+Running several OpenCode sessions at once gets difficult surprisingly quickly, if you aren't constantly focused on the terminal.
 
 Which one is still working?
 Which agent is waiting for permission?
