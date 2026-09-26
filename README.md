@@ -51,22 +51,33 @@ Install the Omarchy plugin:
 omarchy plugin add https://github.com/jcergolj/praefectus-opencode.git --enable
 ```
 
-The widget can immediately detect running OpenCode processes and idle sessions.
+The widget detects running OpenCode processes and idle sessions without
+installing anything into OpenCode. OpenCode's status bridge is an optional,
+separate integration: install it only if you want live session states from
+OpenCode events.
 
-When the widget is enabled, it automatically installs the bundled OpenCode
-status bridge through Omarchy's native process integration. The bridge is
-placed at `~/.config/opencode/plugins/praefectus-opencode.js` and is loaded by
-new OpenCode sessions.
+To opt in, explicitly link the bundled bridge into OpenCode's plugin directory:
 
-Restart already-running OpenCode sessions once after enabling the widget.
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -s /path/to/praefectus-opencode/plugin/index.js ~/.config/opencode/plugins/praefectus-opencode.js
+```
+
+Replace `/path/to/praefectus-opencode` with the local directory containing this
+plugin. The link points to the Marketplace plugin's bundled source; removing
+the Omarchy plugin removes that source, so OpenCode can no longer load the
+bridge. Restart OpenCode sessions after installing the bridge.
 
 ## Uninstall
 
-Remove the automatically installed OpenCode status bridge:
+If you opted into the OpenCode status bridge, remove its link:
 
 ```bash
 rm ~/.config/opencode/plugins/praefectus-opencode.js
 ```
+
+If you previously used a version that automatically created a symlink, remove
+that link with the same command. This does not remove any other OpenCode plugin.
 
 Remove the Omarchy plugin:
 
@@ -74,7 +85,9 @@ Remove the Omarchy plugin:
 omarchy plugin remove praefectus.opencode
 ```
 
-Restart OpenCode after removing the files.
+Restart OpenCode after removing the bridge. The Omarchy plugin never creates or
+removes entries in OpenCode's plugin directory; opt-in and cleanup are explicit
+user actions.
 
 ## Keyboard Shortcuts
 
