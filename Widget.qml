@@ -542,6 +542,7 @@ Panel {
                   anchors.top: parent.top
                   anchors.topMargin: Style.space(12)
                   text: modelData.attention ? "*" : "."
+                  textFormat: Text.PlainText
                   color: root.statusColor(modelData.state)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -559,6 +560,7 @@ Panel {
 
                     Text {
                       text: String(modelData.project || "OpenCode")
+                      textFormat: Text.PlainText
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.bodySmall
@@ -570,6 +572,7 @@ Panel {
                     Text {
                       id: ageText
                       text: root.formatAge(modelData.attention_since || modelData.last_transition_ts)
+                      textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
@@ -579,6 +582,7 @@ Panel {
                   Text {
                     width: parent.width
                     text: root.previewFor(modelData)
+                    textFormat: Text.PlainText
                     color: root.statusColor(modelData.state)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -592,6 +596,7 @@ Panel {
                     width: parent.width
                     text: (modelData.tmux_pane ? "tmux " + modelData.tmux_pane : "terminal")
                       + (modelData.directory ? " · " + modelData.directory : "")
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -602,6 +607,7 @@ Panel {
                     visible: expanded
                     width: parent.width
                     text: root.contextUsageLabel(modelData)
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
