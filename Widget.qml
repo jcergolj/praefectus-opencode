@@ -251,12 +251,8 @@ Panel {
       : "OpenCode session finished"
   }
 
-  function notificationBody(eventType, session) {
-    var project = String(session.project || "OpenCode")
-    if (eventType !== "attention") return project
-    var preview = String(session.preview || "")
-    if (!preview || preview === statusLabel(session.state)) return project
-    return project + " · " + preview
+  function notificationBody() {
+    return "OpenCode session status changed"
   }
 
   function sendNotification(eventType, session) {
@@ -265,7 +261,7 @@ Panel {
       targetSessionId: session.session_id === undefined || session.session_id === null ? "" : String(session.session_id),
       targetSourcePid: session.source_pid === undefined || session.source_pid === null ? "" : String(session.source_pid),
       notificationSummary: notificationSummary(eventType),
-      notificationBody: notificationBody(eventType, session)
+      notificationBody: notificationBody()
     })
     if (!notificationProcess) console.warn("praefectus-opencode", "could not create notification process")
   }
