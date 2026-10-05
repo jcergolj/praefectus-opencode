@@ -33,6 +33,9 @@ def snapshot_signature(snapshot: Mapping[str, Any]) -> str:
 def session_identity(session_record: Mapping[str, Any]) -> str:
     """Return a stable identity for a session in the cycle state file."""
 
+    tracking_id = session_record.get("tracking_id")
+    if isinstance(tracking_id, str) and tracking_id:
+        return tracking_id
     session_id = session_record.get("session_id")
     if session_id is not None and str(session_id):
         return "session:" + str(session_id)

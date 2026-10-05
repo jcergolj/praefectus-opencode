@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from watch_test_support import watch
+from watch_test_support import FakeAttentionSource, FakeTerminal, watch
 
 
 class AttentionStateReaderTests(unittest.TestCase):
@@ -97,7 +97,39 @@ class ProcessSourceTests(unittest.TestCase):
             self.assertEqual(source.ancestors(101), [101])
 
             (process_dir / "stat").write_text("malformed")
-            self.assertIsNone(source.inspect(101).start_ticks)
+            self.assertIsNone(source.inspect(101))
+
+    def test_snapshot_freezes_known_lifetime_during_a_failed_proc_inspection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proc_root = Path(directory)
+            process_dir = proc_root / "101"
+            process_dir.mkdir()
+            (process_dir / "comm").write_text("opencode\n")
+            (process_dir / "cwd").symlink_to(proc_root, target_is_directory=True)
+            stat = process_dir / "stat"
+            self.write_stat(stat, 1, 200)
+            records = {101: {"state": "WORKING", "process_start_ticks": 200}}
+            snapshots = watch.SnapshotService(watch.SessionCollector(
+                watch.ProcProcessSource(proc_root, lambda: 1000, 100),
+                FakeAttentionSource(records), FakeTerminal(),
+            ))
+            original = snapshots.snapshot()["sessions"][0]
+            stat.write_text("malformed")
+            # An uncertain inspection must not apply a new tickless idle record
+            # against cached process information and finish the old lifetime.
+            records[101] = {"state": "IDLE", "process_started_at": 1002}
+            uncertain = snapshots.snapshot()["sessions"][0]
+            self.assertEqual(uncertain["state"], "WORKING")
+            self.assertEqual(uncertain["tracking_id"], original["tracking_id"])
+            self.assertEqual(uncertain["project"], original["project"])
+            records.clear()
+            self.write_stat(stat, 1, 200)
+            self.assertEqual(snapshots.snapshot()["sessions"][0]["state"], "WORKING")
+            self.write_stat(stat, 1, 300)
+            replacement = snapshots.snapshot()["sessions"][0]
+            self.assertEqual(replacement["state"], "IDLE")
+            self.assertNotEqual(replacement["tracking_id"], original["tracking_id"])
+            self.assertTrue(replacement["project"].endswith(" II"))
 
 
 if __name__ == "__main__":

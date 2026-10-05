@@ -10,6 +10,63 @@ const bridge = await import(`data:text/javascript,${encodeURIComponent(pluginSou
 const policyModule = await loadQmlScript("../NotificationPolicy.js");
 const delivery = await loadQmlScript("../NotificationDelivery.js");
 
+test("PID replacement cannot finish old work and hosted-session changes preserve notification memory", async () => {
+  let record;
+  function reporter(startTicks) {
+    return new bridge.OpenCodeStatusReporter({
+      stateMachine: new bridge.LifecycleStateMachine(),
+      eventMapper: new bridge.EventStateMapper(),
+      recordBuilder: new bridge.StatusRecordBuilder({
+        processId: 101, processStartedAt: 100, processStartTicks: startTicks,
+        directory: "/work/alpha", environment: {}, clock: () => 200,
+      }),
+      recordWriter: { write(value) { record = value; } },
+    });
+  }
+  const frames = [];
+  function capture(process, records = [record]) {
+    frames.push({ processes: [structuredClone(process)], records: structuredClone(records) });
+  }
+  const old = reporter(12345);
+  await old.initialize();
+  await old.handle({ type: "session.status", properties: { sessionID: "old", status: "busy" } });
+  const oldProcess = structuredClone(record);
+  capture(oldProcess);
+  capture(oldProcess, []); // A missing record must not finish the same process.
+  capture({ ...oldProcess, inspectable: false }, [
+    { ...record, state: "IDLE", process_start_ticks: null },
+  ]); // Uncertain process inspection freezes the last reliable observation.
+  const replacementProcess = { ...oldProcess, process_start_ticks: 54321 };
+  capture(replacementProcess); // The old record stays on disk across PID reuse.
+
+  const replacement = reporter(54321);
+  await replacement.initialize();
+  await replacement.handle({ type: "permission.asked", properties: { sessionID: "parent", id: "p1" } });
+  capture(replacementProcess);
+  await replacement.handle({ type: "session.updated", properties: { sessionID: "child" } });
+  capture(replacementProcess);
+  await replacement.handle({ type: "permission.replied", properties: { sessionID: "parent", id: "p1", reply: "once" } });
+  capture(replacementProcess);
+  await replacement.handle({ type: "session.idle", properties: { sessionID: "child" } });
+  capture(replacementProcess);
+
+  const watcher = spawnSync("python3", [fileURLToPath(new URL("./notification_trace_snapshots.py", import.meta.url))], {
+    input: JSON.stringify(frames), encoding: "utf8",
+  });
+  assert.equal(watcher.status, 0, watcher.stderr);
+  const snapshots = JSON.parse(watcher.stdout);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.sessions[0].state), [
+    "WORKING", "WORKING", "WORKING", "IDLE", "NEEDS_APPROVAL", "NEEDS_APPROVAL", "WORKING", "IDLE",
+  ]);
+  const policy = policyModule.create();
+  assert.deepEqual(snapshots.map((snapshot) => plain(policy.accept(JSON.stringify(snapshot), true).decisions)), [
+    [], [], [], [],
+    [{ eventType: "attention", sessionId: "parent", sourcePid: "101" }],
+    [], [],
+    [{ eventType: "finished", sessionId: "child", sourcePid: "101" }],
+  ]);
+});
+
 test("bridge events flow through runtime records and watcher snapshots to notification decisions", async () => {
   let record;
   const reporter = new bridge.OpenCodeStatusReporter({

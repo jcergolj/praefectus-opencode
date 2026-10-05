@@ -45,7 +45,6 @@ from .domain import (
     SessionState,
     SessionStateFactory,
     SessionStateMachine,
-    SessionStateRegistry,
     SessionStatus,
     SnapshotSource,
     StateFactory,
@@ -63,6 +62,7 @@ from .focus import (
     parse_pid,
 )
 from .snapshots import SessionCollector, SessionFactory, SnapshotService
+from .tracking import ProcessObservation, SessionTracker, TrackedSession
 from .sources import (
     AttentionStateReader,
     ProcProcessSource,
@@ -127,6 +127,7 @@ __all__ = [
     "PROCESS_START_TOLERANCE",
     "ProcProcessSource",
     "ProcessInfo",
+    "ProcessObservation",
     "ProcessSource",
     "RUNTIME_DIR",
     "STATUS_COUNT_BUCKETS",
@@ -139,7 +140,7 @@ __all__ = [
     "SessionState",
     "SessionStateFactory",
     "SessionStateMachine",
-    "SessionStateRegistry",
+    "SessionTracker",
     "SessionStatus",
     "SnapshotService",
     "SnapshotSource",
@@ -148,6 +149,7 @@ __all__ = [
     "TerminalSource",
     "TmuxClient",
     "TmuxPane",
+    "TrackedSession",
     "WaitingSessionState",
     "WorkingSessionState",
     "build_runtime",

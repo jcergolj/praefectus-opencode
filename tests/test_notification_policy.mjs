@@ -88,6 +88,13 @@ test("malformed snapshots are rejected atomically without establishing or replac
     snapshot([null]), snapshot([[]]), snapshot([{}]),
     snapshot([session("UNKNOWN")]), snapshot([session("IDLE", { attention: "false" })]),
     snapshot([session("IDLE", { source_pid: {}, session_id: {} })]),
+    snapshot([session("IDLE", { tracking_id: "" })]),
+    snapshot([session("IDLE", { tracking_id: null })]),
+    snapshot([session("IDLE", { tracking_id: 12345 })]),
+    snapshot([
+      session("IDLE", { tracking_id: "same-lifetime" }),
+      session("WAITING", { source_pid: 202, tracking_id: "same-lifetime" }),
+    ]),
     snapshot([session("IDLE", { source_pid: null, session_id: "" })]),
     snapshot([session("IDLE"), session("WAITING")]),
     snapshot([session("IDLE"), session("UNKNOWN", { source_pid: 202 })]),

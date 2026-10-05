@@ -20,6 +20,8 @@ function validateSession(session) {
     throw new Error("Invalid session attention")
   if (session.session_id !== undefined && session.session_id !== null && typeof session.session_id !== "string")
     throw new Error("Invalid session ID")
+  if (session.tracking_id !== undefined && (typeof session.tracking_id !== "string" || session.tracking_id === ""))
+    throw new Error("Invalid tracking ID")
   var pid = session.source_pid
   if (pid !== undefined && pid !== null && pid !== ""
       && !((typeof pid === "number" && isFinite(pid) && pid > 0 && Math.floor(pid) === pid)
@@ -45,7 +47,8 @@ function create() {
         var sessionId = session.session_id === undefined || session.session_id === null
           ? "" : String(session.session_id)
         if (sourcePid === "" && sessionId === "") throw new Error("Missing session identity")
-        var identity = sourcePid !== "" ? "pid:" + sourcePid : "session:" + sessionId
+        var identity = session.tracking_id !== undefined
+          ? session.tracking_id : (sourcePid !== "" ? "pid:" + sourcePid : "session:" + sessionId)
         if (currentSessions[identity]) throw new Error("Duplicate session identity")
         var current = {
           state: session.state,

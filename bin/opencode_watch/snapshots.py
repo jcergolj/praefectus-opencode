@@ -2,10 +2,8 @@
 
 import os
 import time
-from dataclasses import replace
-from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
 
-from .config import PROCESS_START_TOLERANCE
 from .domain import (
     AttentionSource,
     DEFAULT_PREVIEWS,
@@ -14,12 +12,11 @@ from .domain import (
     ProcessSource,
     Session,
     SessionSource,
-    SessionStateRegistry,
-    SessionStatus,
     STATUS_COUNT_BUCKETS,
     TerminalSource,
     TmuxPane,
 )
+from .tracking import SessionTracker, TrackedSession
 
 
 def roman_number(number: int) -> str:
@@ -41,16 +38,17 @@ class SessionFactory:
         self,
         process: ProcessInfo,
         pane: Optional[TmuxPane],
-        status_record: Mapping[str, Any],
-        observed_state: Optional[Union[SessionStatus, str]] = None,
+        tracked: TrackedSession,
     ) -> Session:
-        current_status = SessionStatus.from_value(observed_state)
-        if current_status is None:
-            current_status = SessionStatus.from_value(status_record.get("state"))
-        current_status = current_status or SessionStatus.IDLE
+        current_status = tracked.status
+        status_record = tracked.record
+        project = os.path.basename(process.directory) or "OpenCode"
+        if tracked.number > 1:
+            project = f"{project} {roman_number(tracked.number)}"
         return Session(
             session_id=status_record.get("session_id", f"pid:{process.pid}"),
-            project=os.path.basename(process.directory) or "OpenCode",
+            tracking_id=tracked.identity,
+            project=project,
             state=current_status.value,
             tmux_pane=pane.id if pane else None,
             tmux_socket=status_record.get("tmux_socket"),
@@ -79,15 +77,13 @@ class SessionCollector:
         attention_source: AttentionSource,
         terminal_source: TerminalSource,
         session_factory: Optional[SessionFactory] = None,
-        state_registry: Optional[SessionStateRegistry] = None,
+        tracker: Optional[SessionTracker] = None,
     ):
         self.process_source = process_source
         self.attention_source = attention_source
         self.terminal_source = terminal_source
         self.session_factory = session_factory or SessionFactory()
-        self.state_registry = state_registry or SessionStateRegistry()
-        self._session_numbers: Dict[ProcessInfo, int] = {}
-        self._directory_sequences: Dict[str, int] = {}
+        self.tracker = tracker or SessionTracker()
 
     def collect(self) -> List[Session]:
         status_records = self.attention_source.read()
@@ -95,42 +91,30 @@ class SessionCollector:
         panes = self.terminal_source.panes()
         sessions: List[Session] = []
         active_pids: Set[int] = set()
-        active_processes: Set[ProcessInfo] = set()
-        processes = [
-            process for pid in opencode_pids
-            if (process := self.process_source.inspect(pid)) is not None
-        ]
+        processes: List[Tuple[ProcessInfo, Optional[TrackedSession]]] = []
+        for pid in opencode_pids:
+            process = self.process_source.inspect(pid)
+            if process is not None:
+                processes.append((process, None))
+            else:
+                last_observation = self.tracker.last_observation(pid)
+                if last_observation is not None:
+                    processes.append((last_observation.process, last_observation.session))
 
-        for process in sorted(processes, key=lambda item: (item.started_at, item.pid)):
+        for process, frozen in sorted(processes, key=lambda item: (item[0].started_at, item[0].pid)):
             session = self._collect_process(
                 process,
                 opencode_pids,
                 status_records,
                 panes,
+                frozen,
             )
             if session is None:
                 continue
             active_pids.add(process.pid)
-            active_processes.add(process)
-            number = self._session_numbers.get(process)
-            if number is None:
-                number = self._directory_sequences.get(process.directory, 0) + 1
-                self._directory_sequences[process.directory] = number
-                self._session_numbers[process] = number
-            if number > 1:
-                session = replace(session, project=f"{session.project} {roman_number(number)}")
             sessions.append(session)
 
-        self.state_registry.remove_missing(active_pids)
-        self._session_numbers = {
-            process: number for process, number in self._session_numbers.items()
-            if process in active_processes
-        }
-        active_directories = {process.directory for process in active_processes}
-        self._directory_sequences = {
-            directory: number for directory, number in self._directory_sequences.items()
-            if directory in active_directories
-        }
+        self.tracker.remove_missing(active_pids)
         return sorted(sessions, key=lambda session: session.source_pid)
 
     def _collect_process(
@@ -139,6 +123,7 @@ class SessionCollector:
         opencode_pids: Set[int],
         status_records: Mapping[int, Mapping[str, Any]],
         panes: List[TmuxPane],
+        frozen: Optional[TrackedSession] = None,
     ) -> Optional[Session]:
         process_pid = process.pid
         process_ancestors = self.process_source.ancestors(process_pid)
@@ -146,44 +131,15 @@ class SessionCollector:
             return None
 
         status_record = status_records.get(process_pid, {})
-        if not self._matches_process(process, status_record):
-            status_record = {}
         pane = next(
             (pane for pane in panes if pane.pid in process_ancestors),
             None,
         )
-        observed_status = (
-            status_record.get("state") if "state" in status_record else None
-        )
-        current_status = self.state_registry.observe(process_pid, observed_status)
         return self.session_factory.create(
             process,
             pane,
-            status_record,
-            observed_state=current_status,
+            frozen if frozen is not None else self.tracker.observe(process, status_record),
         )
-
-    @staticmethod
-    def _matches_process(
-        process: ProcessInfo,
-        status_record: Mapping[str, Any],
-    ) -> bool:
-        recorded_start_ticks = status_record.get("process_start_ticks")
-        if recorded_start_ticks is not None and process.start_ticks is not None:
-            return (
-                type(recorded_start_ticks) is int
-                and recorded_start_ticks == process.start_ticks
-            )
-        recorded_process_started_at = status_record.get("process_started_at")
-        if recorded_process_started_at is None:
-            return True
-        try:
-            return (
-                abs(float(recorded_process_started_at) - process.started_at)
-                <= PROCESS_START_TOLERANCE
-            )
-        except (TypeError, ValueError):
-            return False
 
 
 class SnapshotService:

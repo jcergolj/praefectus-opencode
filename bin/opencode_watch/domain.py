@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import (
     Any,
-    Callable,
     Dict,
     FrozenSet,
     Iterable,
@@ -67,6 +66,7 @@ class Session:
     tmux_pane: Optional[str]
     tmux_socket: Any
     source_pid: int
+    tracking_id: str
     directory: str
     notification_id: Any
     attention: bool
@@ -80,6 +80,7 @@ class Session:
     def as_dict(self) -> Dict[str, Any]:
         return {
             "session_id": self.session_id,
+            "tracking_id": self.tracking_id,
             "project": self.project,
             "state": self.state,
             "tmux_pane": self.tmux_pane,
@@ -266,28 +267,3 @@ class SessionStateMachine:
         except InvalidTransition:
             return False
         return True
-
-
-class SessionStateRegistry:
-    """Keep one state machine per live top-level OpenCode process."""
-
-    def __init__(
-        self,
-        machine_factory: Optional[Callable[[], SessionStateMachine]] = None,
-    ):
-        self._machine_factory = machine_factory or SessionStateMachine
-        self._machines: Dict[int, SessionStateMachine] = {}
-
-    def observe(self, source_pid: int, observed_status: Any = None) -> SessionStatus:
-        machine = self._machines.get(source_pid)
-        if machine is None:
-            machine = self._machine_factory()
-            self._machines[source_pid] = machine
-        if observed_status is not None:
-            machine.transition_to(observed_status)
-        return machine.status
-
-    def remove_missing(self, active_pids: Iterable[int]) -> None:
-        active_pid_set = set(active_pids)
-        for source_pid in set(self._machines) - active_pid_set:
-            del self._machines[source_pid]

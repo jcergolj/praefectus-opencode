@@ -160,10 +160,12 @@ class ProcProcessSource:
             return None
 
         parent_pid, process_start_ticks = process_stat(pid, self.proc_root)
+        if parent_pid is None:
+            return None
         process_started_at = self.boot_time + process_start_ticks / self.clock_ticks
         return ProcessInfo(
             pid,
             directory,
             process_started_at,
-            process_start_ticks if parent_pid is not None else None,
+            process_start_ticks,
         )

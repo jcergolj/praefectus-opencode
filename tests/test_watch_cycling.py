@@ -2,10 +2,40 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from watch_test_support import watch
+from watch_test_support import FakeAttentionSource, FakeProcessSource, FakeTerminal, watch
 
 
 class FocusCycleStoreTests(unittest.TestCase):
+    def test_cycle_follows_process_lifetimes_across_hosted_session_changes(self):
+        processes = {
+            pid: watch.ProcessInfo(pid, "/work/alpha", pid, pid * 10)
+            for pid in (101, 202, 303)
+        }
+        records = {pid: {"session_id": str(pid), "state": "WORKING"} for pid in processes}
+        targets = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "focus.json"
+
+            def focus():
+                # Each CLI press creates a fresh collector and cycle store.
+                snapshots = watch.SnapshotService(watch.SessionCollector(
+                    FakeProcessSource(processes, {}), FakeAttentionSource(records), FakeTerminal()
+                ))
+                self.assertTrue(watch.FocusCycleStore(path).focus(
+                    snapshots.snapshot(), "all", lambda target: targets.append(target) or True
+                ))
+
+            focus()
+            focus()
+            records[202]["session_id"] = "child"
+            focus()
+            self.assertEqual(targets, [101, 202, 303])
+            focus()
+            focus()
+            processes[202] = watch.ProcessInfo(202, "/work/alpha", 400, 99999)
+            focus()
+            self.assertEqual(targets, [101, 202, 303, 101, 202, 101])
+
     def test_session_selector_orders_attention_by_age_and_identity(self):
         snapshot = {
             "sessions": [

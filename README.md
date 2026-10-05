@@ -160,6 +160,12 @@ The bundled OpenCode plugin publishes lightweight per-process status information
 Praefectus does **not** scrape terminal output and does **not** access OpenCode's private storage.
 
 Processes are matched using Linux process start ticks, which prevents stale status information from being associated with newly created processes reusing the same PID.
+When start ticks are unavailable, matching falls back to the process start timestamp.
+Tracking also ties retained state to that process lifetime: a replacement starts
+idle without a valid record, while a continuing process keeps its last observed
+state during a temporary gap in bridge records.
+If a listed process temporarily cannot be inspected, tracking keeps its last
+reliable observation until inspection succeeds or the PID disappears.
 
 ## Why "Praefectus"?
 
@@ -193,7 +199,10 @@ python3 -m unittest discover -s tests -v && node --test tests/test_*.mjs
 and enablement rules. Each widget creates a policy with `create()` and calls
 `accept(jsonLine, notificationsEnabled)`, which returns `{ snapshot, decisions }`.
 Each decision contains an `eventType` (`attention` or `finished`), `sessionId`,
-and `sourcePid`. Identity follows the source PID, falling back to the session ID.
+and `sourcePid`. Watcher snapshots include a `tracking_id` for the process lifetime;
+notifications and focus cycling use it even when the bridge's latest hosted-session
+ID changes. Older snapshots without that field retain their existing identity
+fallbacks (PID then session ID for notifications, session ID then PID for cycling).
 Malformed JSON, invalid counts or session fields, missing identities, and
 duplicate identities throw without advancing the last accepted baseline.
 

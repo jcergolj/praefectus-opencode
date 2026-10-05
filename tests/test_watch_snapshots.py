@@ -4,6 +4,89 @@ from watch_test_support import FakeAttentionSource, FakeProcessSource, FakeTermi
 
 
 class SnapshotServiceTests(unittest.TestCase):
+    def test_temporary_tick_unavailability_does_not_reset_a_known_lifetime(self):
+        processes = {101: watch.ProcessInfo(101, "/work/alpha", 100, 12345)}
+        records = {101: {"state": "WORKING", "process_start_ticks": 12345}}
+        snapshots = watch.SnapshotService(watch.SessionCollector(
+            FakeProcessSource(processes, {}), FakeAttentionSource(records), FakeTerminal()
+        ))
+        original = snapshots.snapshot()["sessions"][0]
+        records.clear()
+        processes[101] = watch.ProcessInfo(101, "/work/alpha", 100)
+        uncertain = snapshots.snapshot()["sessions"][0]
+        self.assertEqual(uncertain["state"], "WORKING")
+        self.assertEqual(uncertain["tracking_id"], original["tracking_id"])
+        self.assertEqual(uncertain["project"], "alpha")
+        processes[101] = watch.ProcessInfo(101, "/work/alpha", 100, 12345)
+        self.assertEqual(snapshots.snapshot()["sessions"][0]["state"], "WORKING")
+        processes[101] = watch.ProcessInfo(101, "/work/alpha", 100, 54321)
+        self.assertEqual(snapshots.snapshot()["sessions"][0]["state"], "IDLE")
+
+    def test_missing_records_retain_state_only_for_the_same_process_lifetime(self):
+        for ticks in (None, 12345):
+            with self.subTest(ticks=ticks):
+                processes = {101: watch.ProcessInfo(101, "/work/alpha", 100, ticks)}
+                record = {"state": "WORKING", "process_started_at": 100}
+                if ticks is not None:
+                    record["process_start_ticks"] = ticks
+                records = {101: record}
+                snapshots = watch.SnapshotService(watch.SessionCollector(
+                    FakeProcessSource(processes, {}), FakeAttentionSource(records), FakeTerminal()
+                ))
+                original = snapshots.snapshot()["sessions"][0]
+                records.clear()
+                retained = snapshots.snapshot()["sessions"][0]
+                self.assertEqual(retained["state"], "WORKING")
+                self.assertEqual(retained["tracking_id"], original["tracking_id"])
+
+                processes[101] = watch.ProcessInfo(
+                    101, "/work/alpha", 200, None if ticks is None else 54321
+                )
+                replacement = snapshots.snapshot()["sessions"][0]
+                self.assertEqual(replacement["state"], "IDLE")
+                self.assertNotEqual(replacement["tracking_id"], original["tracking_id"])
+                self.assertEqual(replacement["project"], "alpha II")
+                records[101] = record
+                self.assertEqual(snapshots.snapshot()["sessions"][0]["state"], "IDLE")
+
+    def test_start_ticks_keep_identity_state_and_titles_stable_despite_epoch_changes(self):
+        processes = {
+            101: watch.ProcessInfo(101, "/work/alpha", 100, 12345),
+            202: watch.ProcessInfo(202, "/work/alpha", 200, 54321),
+        }
+        records = {202: {"state": "WORKING", "process_start_ticks": 54321}}
+        snapshots = watch.SnapshotService(watch.SessionCollector(
+            FakeProcessSource(processes, {}), FakeAttentionSource(records), FakeTerminal()
+        ))
+        before = snapshots.snapshot()["sessions"][1]
+        processes[202] = watch.ProcessInfo(202, "/work/alpha", 260, 54321)
+        records.clear()
+        after = snapshots.snapshot()["sessions"][1]
+        self.assertEqual(after["tracking_id"], before["tracking_id"])
+        self.assertEqual(after["project"], "alpha II")
+        self.assertEqual(after["state"], "WORKING")
+
+    def test_pid_reuse_between_polls_rejects_stale_record_and_resets_state(self):
+        processes = {101: watch.ProcessInfo(101, "/work/alpha", 100, 12345)}
+        records = {101: {
+            "state": "WORKING", "session_id": "old", "process_start_ticks": 12345,
+            "attention": True, "preview": "old preview", "context_tokens": 500,
+        }}
+        collector = watch.SessionCollector(
+            FakeProcessSource(processes, {}), FakeAttentionSource(records), FakeTerminal()
+        )
+        self.assertEqual(collector.collect()[0].state, "WORKING")
+
+        # No empty poll: even a matching epoch cannot override different ticks.
+        processes[101] = watch.ProcessInfo(101, "/work/alpha", 100, 54321)
+        replacement = collector.collect()[0]
+        self.assertEqual(replacement.state, "IDLE")
+        self.assertEqual(replacement.session_id, "pid:101")
+        self.assertFalse(replacement.attention)
+        self.assertEqual(replacement.preview, "idle")
+        self.assertIsNone(replacement.context_tokens)
+        self.assertEqual(replacement.project, "alpha II")
+
     def test_same_directory_titles_use_creation_order_and_roman_numerals(self):
         processes = {
             200 - number: watch.ProcessInfo(200 - number, "/work/foo bar", number)
@@ -109,16 +192,16 @@ class SnapshotServiceTests(unittest.TestCase):
         for process_ticks, record_ticks in ((12345, None), (None, 12345), (None, None)):
             for epoch, expected in ((102.2, True), (160, False)):
                 with self.subTest(process_ticks=process_ticks, record_ticks=record_ticks, epoch=epoch):
-                    record = {"process_started_at": epoch}
+                    record = {"state": "WORKING", "process_started_at": epoch}
                     if record_ticks is not None:
                         record["process_start_ticks"] = record_ticks
-                    self.assertEqual(
-                        watch.SessionCollector._matches_process(
-                            watch.ProcessInfo(101, "/work/alpha", 100, process_ticks),
-                            record,
-                        ),
-                        expected,
+                    collector = watch.SessionCollector(
+                        FakeProcessSource({101: watch.ProcessInfo(
+                            101, "/work/alpha", 100, process_ticks
+                        )}, {}),
+                        FakeAttentionSource({101: record}), FakeTerminal(),
                     )
+                    self.assertEqual(collector.collect()[0].state, "WORKING" if expected else "IDLE")
 
     def test_new_process_uses_its_first_reported_attention_state(self):
         process_source = FakeProcessSource(
