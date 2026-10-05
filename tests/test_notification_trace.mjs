@@ -10,12 +10,132 @@ const bridge = await import(`data:text/javascript,${encodeURIComponent(pluginSou
 const policyModule = await loadQmlScript("../NotificationPolicy.js");
 const delivery = await loadQmlScript("../NotificationDelivery.js");
 
+function watcherSnapshots(frames) {
+  const watcher = spawnSync("python3", [fileURLToPath(new URL("./notification_trace_snapshots.py", import.meta.url))], {
+    input: JSON.stringify(frames), encoding: "utf8",
+  });
+  assert.equal(watcher.status, 0, watcher.stderr);
+  return JSON.parse(watcher.stdout);
+}
+
+test("outstanding attention survives other hosted sessions becoming busy", async () => {
+  for (const [type, state, preview] of [
+    ["permission.asked", "NEEDS_APPROVAL", "edit: app.js"],
+    ["question.asked", "WAITING", "Which option?"],
+  ]) {
+    let record;
+    const reporter = new bridge.OpenCodeStatusReporter({
+      recordBuilder: new bridge.StatusRecordBuilder({
+        processId: 101, processStartedAt: 100, processStartTicks: 12345,
+        directory: "/work/alpha", environment: {}, clock: () => 200,
+      }),
+      recordWriter: { write(value) { record = value; } },
+      contextLimitFor: async () => 100,
+    });
+    const frames = [];
+    await reporter.initialize();
+    frames.push([structuredClone(record)]);
+    await reporter.handle({ type, properties: {
+      sessionID: "A", id: "request-1", permission: "edit", patterns: ["app.js"],
+      question: "Which option?",
+    } });
+    frames.push([structuredClone(record)]);
+    await reporter.handle({ type: "session.status", properties: { sessionID: "B", status: "busy" } });
+    frames.push([structuredClone(record)]);
+    // Force publication after the unrelated event, including context enrichment.
+    await reporter.handle({ type: "message.updated", properties: { info: {
+      sessionID: "B", role: "assistant", tokens: { total: 50 },
+    } } });
+    await reporter.handle({ type: "session.updated", properties: { sessionID: "B" } });
+    frames.push([structuredClone(record)]);
+    assert.equal(record.context_percentage, 50);
+    const attentionFrameCount = frames.length;
+    const replyType = type === "permission.asked" ? "permission.replied" : "question.replied";
+    await reporter.handle({ type, properties: {
+      sessionID: "B", id: "request-1", title: "B request", question: "B request",
+    } });
+    frames.push([structuredClone(record)]);
+    await reporter.handle({ type: replyType, properties: { sessionID: "A", id: "request-1", reply: "once" } });
+    frames.push([structuredClone(record)]);
+    await reporter.handle({ type: replyType, properties: { sessionID: "B", id: "request-1", reply: "once" } });
+    frames.push([structuredClone(record)]);
+    await reporter.handle({ type: "session.idle", properties: { sessionID: "B" } });
+    frames.push([structuredClone(record)]);
+    await reporter.handle({ type: "session.idle", properties: { sessionID: "unrelated" } });
+    frames.push([structuredClone(record)]);
+    await reporter.handle({ type: "session.idle", properties: { sessionID: "A" } });
+    frames.push([structuredClone(record)]);
+    const snapshots = watcherSnapshots(frames);
+    const policy = policyModule.create();
+    assert.deepEqual(plain(policy.accept(JSON.stringify(snapshots[0]), true).decisions), []);
+    for (let index = 1; index < attentionFrameCount; index += 1) {
+      const session = snapshots[index].sessions[0];
+      assert.equal(session.state, state);
+      assert.equal(session.attention, true);
+      assert.equal(session.session_id, "A");
+      assert.equal(session.preview, preview);
+      assert.deepEqual(plain(policy.accept(JSON.stringify(snapshots[index]), true).decisions),
+        index === 1 ? [{ eventType: "attention", sessionId: "A", sourcePid: "101" }] : []);
+    }
+    const remaining = snapshots.slice(attentionFrameCount);
+    assert.deepEqual(remaining.map((snapshot) => snapshot.sessions[0].state), [
+      state, state, "WORKING", "WORKING", "WORKING", "IDLE",
+    ]);
+    assert.equal(remaining[0].sessions[0].preview, preview, "newer request cannot replace the oldest");
+    assert.equal(remaining[1].sessions[0].session_id, "B");
+    assert.equal(remaining[1].sessions[0].preview, "B request");
+    assert.equal(remaining[1].sessions[0].attention, true);
+    assert.equal(remaining[2].sessions[0].attention, false);
+    assert.equal(remaining[2].sessions[0].preview, "working");
+    assert.deepEqual(remaining.map((snapshot) => plain(policy.accept(JSON.stringify(snapshot), true).decisions)), [
+      [], [], [], [], [], [{ eventType: "finished", sessionId: "A", sourcePid: "101" }],
+    ]);
+  }
+});
+
+test("rejecting a second request does not publish a false completion after work resumes", async () => {
+  for (const [asked, replied, rejected] of [
+    ["permission.asked", "permission.replied", "permission.replied"],
+    ["question.asked", "question.replied", "question.rejected"],
+  ]) {
+    let record;
+    const reporter = new bridge.OpenCodeStatusReporter({
+      recordBuilder: new bridge.StatusRecordBuilder({
+        processId: 101, processStartedAt: 100, processStartTicks: 12345,
+        directory: "/work/alpha", environment: {}, clock: () => 200,
+      }),
+      recordWriter: { write(value) { record = value; } },
+    });
+    const frames = [];
+    async function event(type, properties) {
+      await reporter.handle({ type, properties });
+      frames.push([structuredClone(record)]);
+    }
+    await reporter.initialize();
+    frames.push([structuredClone(record)]);
+    await event(asked, { sessionID: "A", id: "first" });
+    await event(asked, { sessionID: "A", id: "second" });
+    await event(replied, { sessionID: "A", id: "first", reply: "once" });
+    await event(rejected, { sessionID: "A", id: "second", reply: "reject" });
+    await event("session.idle", { sessionID: "unrelated" });
+    await event("session.idle", { sessionID: "A" });
+    const snapshots = watcherSnapshots(frames);
+    const attentionState = asked === "permission.asked" ? "NEEDS_APPROVAL" : "WAITING";
+    assert.deepEqual(snapshots.map((snapshot) => snapshot.sessions[0].state), [
+      "IDLE", attentionState, attentionState, attentionState, "WORKING", "WORKING", "IDLE",
+    ]);
+    const policy = policyModule.create();
+    assert.deepEqual(snapshots.map((snapshot) => plain(policy.accept(JSON.stringify(snapshot), true).decisions)), [
+      [], [{ eventType: "attention", sessionId: "A", sourcePid: "101" }], [], [], [], [],
+      [{ eventType: "finished", sessionId: "A", sourcePid: "101" }],
+    ]);
+  }
+});
+
 test("PID replacement cannot finish old work and hosted-session changes preserve notification memory", async () => {
   let record;
   function reporter(startTicks) {
     return new bridge.OpenCodeStatusReporter({
-      stateMachine: new bridge.LifecycleStateMachine(),
-      eventMapper: new bridge.EventStateMapper(),
       recordBuilder: new bridge.StatusRecordBuilder({
         processId: 101, processStartedAt: 100, processStartTicks: startTicks,
         directory: "/work/alpha", environment: {}, clock: () => 200,
@@ -50,28 +170,21 @@ test("PID replacement cannot finish old work and hosted-session changes preserve
   await replacement.handle({ type: "session.idle", properties: { sessionID: "child" } });
   capture(replacementProcess);
 
-  const watcher = spawnSync("python3", [fileURLToPath(new URL("./notification_trace_snapshots.py", import.meta.url))], {
-    input: JSON.stringify(frames), encoding: "utf8",
-  });
-  assert.equal(watcher.status, 0, watcher.stderr);
-  const snapshots = JSON.parse(watcher.stdout);
+  const snapshots = watcherSnapshots(frames);
   assert.deepEqual(snapshots.map((snapshot) => snapshot.sessions[0].state), [
-    "WORKING", "WORKING", "WORKING", "IDLE", "NEEDS_APPROVAL", "NEEDS_APPROVAL", "WORKING", "IDLE",
+    "WORKING", "WORKING", "WORKING", "IDLE", "NEEDS_APPROVAL", "NEEDS_APPROVAL", "WORKING", "WORKING",
   ]);
   const policy = policyModule.create();
   assert.deepEqual(snapshots.map((snapshot) => plain(policy.accept(JSON.stringify(snapshot), true).decisions)), [
     [], [], [], [],
     [{ eventType: "attention", sessionId: "parent", sourcePid: "101" }],
-    [], [],
-    [{ eventType: "finished", sessionId: "child", sourcePid: "101" }],
+    [], [], [],
   ]);
 });
 
 test("bridge events flow through runtime records and watcher snapshots to notification decisions", async () => {
   let record;
   const reporter = new bridge.OpenCodeStatusReporter({
-    stateMachine: new bridge.LifecycleStateMachine(),
-    eventMapper: new bridge.EventStateMapper(),
     recordBuilder: new bridge.StatusRecordBuilder({
       processId: 101, processStartedAt: 100, processStartTicks: 12345,
       directory: "/work/<img src=x>", environment: {}, clock: () => 200,
@@ -106,11 +219,7 @@ test("bridge events flow through runtime records and watcher snapshots to notifi
   await event("question.replied", { sessionID: "parent", id: "question-1" });
   await event("session.idle", { sessionID: "parent" }, finished);
 
-  const watcher = spawnSync("python3", [fileURLToPath(new URL("./notification_trace_snapshots.py", import.meta.url))], {
-    input: JSON.stringify(steps.map((step) => step.records)), encoding: "utf8",
-  });
-  assert.equal(watcher.status, 0, watcher.stderr);
-  const snapshots = JSON.parse(watcher.stdout);
+  const snapshots = watcherSnapshots(steps.map((step) => step.records));
   assert.equal(snapshots[3].sessions[0].state, "WORKING", "child completion cannot finish its parent");
   assert.equal(snapshots[4].sessions[0].project, "<img src=x>");
   assert.equal(snapshots[4].sessions[0].preview, "<i>private preview</i>");

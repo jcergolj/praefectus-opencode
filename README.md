@@ -147,6 +147,15 @@ A process is considered finished only after all of its busy sessions become
 idle. A subagent finishing does not trigger a finished notification while its
 parent session is still working.
 
+When one OpenCode process hosts multiple sessions, outstanding requests take
+precedence over busy or idle events from any session. Permission requests take
+precedence over response requests; within each kind, the oldest outstanding
+request supplies the displayed session and preview. Updating a request keeps its
+place in that order. Answering it reveals the next outstanding request, or the
+aggregate activity state if none remain. Replies that resume work count as busy
+until that session becomes idle, even if no separate busy event arrives.
+Rejecting another request does not finish that resumed work.
+
 Clicking a notification focuses the corresponding session.
 
 The notification timeout can be configured between 8 and 30 seconds from the widget settings.

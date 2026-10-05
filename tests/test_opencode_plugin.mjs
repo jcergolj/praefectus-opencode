@@ -23,7 +23,7 @@ test("process start ticks use field 22 after the last closing parenthesis", () =
       processStartedAt: 10,
       processStartTicks: result,
     });
-    assert.equal(builder.build("WORKING").process_start_ticks, ticks);
+    assert.equal(builder.build({ state: "WORKING" }).process_start_ticks, ticks);
   }
 });
 
@@ -46,37 +46,9 @@ test("unreadable or malformed process stat falls back to timestamp-only records"
       processId: 123,
       processStartedAt: 10,
       processStartTicks: ticks,
-    }).build("WORKING");
+    }).build({ state: "WORKING" });
     assert.equal(Object.hasOwn(record, "process_start_ticks"), false);
     assert.equal(record.process_started_at, 10);
-  }
-});
-
-test("lifecycle state machine enforces the complete transition matrix", () => {
-  const sessionStatuses = Object.values(plugin.SessionStatus);
-  const transitions = {
-    IDLE: ["IDLE", "WORKING", "WAITING", "NEEDS_APPROVAL"],
-    WORKING: ["WORKING", "IDLE", "NEEDS_APPROVAL", "WAITING"],
-    WAITING: ["WAITING", "WORKING", "NEEDS_APPROVAL", "IDLE"],
-    NEEDS_APPROVAL: [
-      "NEEDS_APPROVAL",
-      "WORKING",
-      "WAITING",
-      "IDLE",
-    ],
-  };
-
-  for (const currentState of sessionStatuses) {
-    for (const targetState of sessionStatuses) {
-      const machine = new plugin.LifecycleStateMachine({ initialState: currentState });
-      const allowed = transitions[currentState].includes(targetState);
-
-      assert.equal(machine.transitionTo(targetState), allowed);
-      assert.equal(
-        machine.currentState,
-        allowed ? targetState : currentState,
-      );
-    }
   }
 });
 
@@ -189,12 +161,15 @@ test("record builder produces the watcher status contract", () => {
     clock: () => timestamps.shift(),
   });
 
-  const idleRecord = builder.build("IDLE", {
+  const status = new plugin.ProcessStatus();
+  const event = {
     type: "session.created",
     properties: { sessionID: "session-1" },
-  });
+  };
+  const idleRecord = builder.build(status.accept(event).decision, event);
   builder.markTransition();
-  const waitingRecord = builder.build("WAITING", { type: "question.asked" });
+  const question = { type: "question.asked", properties: { sessionID: "session-1" } };
+  const waitingRecord = builder.build(status.accept(question).decision, question);
 
   assert.deepEqual(idleRecord, {
     session_id: "session-1",
@@ -232,8 +207,6 @@ test("reporter writes a baseline record before the first session event", async (
     clock: () => 20,
   });
   const reporter = new plugin.OpenCodeStatusReporter({
-    stateMachine: new plugin.LifecycleStateMachine(),
-    eventMapper: new plugin.EventStateMapper(),
     recordBuilder: builder,
     recordWriter: {
       write(record) {
@@ -288,7 +261,7 @@ test("record builder includes the latest context percentage", () => {
 
   assert.equal(builder.updateContextUsage(info, 1000), true);
   assert.deepEqual(
-    builder.build("WORKING", {
+    builder.build({ state: "WORKING", attention: false, sessionId: "session-1", preview: "working" }, {
       type: "message.updated",
       properties: { info },
     }),
@@ -325,8 +298,6 @@ test("reporter writes assistant context usage updates", async () => {
     clock: () => 20,
   });
   const reporter = new plugin.OpenCodeStatusReporter({
-    stateMachine: new plugin.LifecycleStateMachine(),
-    eventMapper: new plugin.EventStateMapper(),
     recordBuilder: builder,
     recordWriter: {
       write(record) {
@@ -362,12 +333,10 @@ test("reporter writes assistant context usage updates", async () => {
 test("reporter records an initial idle status from a restored session", async () => {
   const writtenRecords = [];
   const reporter = new plugin.OpenCodeStatusReporter({
-    stateMachine: new plugin.LifecycleStateMachine(),
-    eventMapper: new plugin.EventStateMapper(),
     recordBuilder: {
       markTransition() {},
-      build(sessionState, event) {
-        return { state: sessionState, eventType: event.type };
+      build(decision, event) {
+        return { state: decision.state, eventType: event.type };
       },
     },
     recordWriter: {
@@ -397,14 +366,15 @@ test("permission records include the requested operation in their preview", () =
     clock: () => 20,
   });
 
-  const permissionRecord = builder.build("NEEDS_APPROVAL", {
+  const event = {
     type: "permission.updated",
     properties: {
       sessionID: "session-1",
       permission: "edit",
       patterns: ["src/app.js"],
     },
-  });
+  };
+  const permissionRecord = builder.build(new plugin.ProcessStatus().accept(event).decision, event);
 
   assert.equal(permissionRecord.preview, "edit: src/app.js");
 });
@@ -414,14 +384,12 @@ test("reporter coordinates mapping, transitions, records, and disposal", async (
   let removeCallCount = 0;
   let transitionMarkCount = 0;
   const reporter = new plugin.OpenCodeStatusReporter({
-    stateMachine: new plugin.LifecycleStateMachine(),
-    eventMapper: new plugin.EventStateMapper(),
     recordBuilder: {
       markTransition() {
         transitionMarkCount += 1;
       },
-      build(sessionState, event) {
-        return { state: sessionState, eventType: event.type };
+      build(decision, event) {
+        return { state: decision.state, eventType: event.type };
       },
     },
     recordWriter: {
@@ -442,7 +410,7 @@ test("reporter coordinates mapping, transitions, records, and disposal", async (
     type: "session.status",
     properties: { sessionID: "session-1", status: "busy" },
   });
-  await reporter.handle({ type: "question.asked" });
+  await reporter.handle({ type: "question.asked", properties: { sessionID: "session-1", id: "question-1" } });
   await reporter.handle({
     type: "permission.asked",
     properties: { id: "permission-1", sessionID: "session-1" },
@@ -460,6 +428,10 @@ test("reporter coordinates mapping, transitions, records, and disposal", async (
     properties: { sessionID: "session-1" },
   });
   await reporter.handle({
+    type: "question.rejected",
+    properties: { sessionID: "session-1", id: "question-1" },
+  });
+  await reporter.handle({
     type: "permission.asked",
     properties: { id: "permission-2", sessionID: "session-1" },
   });
@@ -470,22 +442,21 @@ test("reporter coordinates mapping, transitions, records, and disposal", async (
     { state: "WORKING", eventType: "session.status" },
     { state: "WAITING", eventType: "question.asked" },
     { state: "NEEDS_APPROVAL", eventType: "permission.asked" },
-    { state: "IDLE", eventType: "permission.replied" },
+    { state: "WAITING", eventType: "permission.replied" },
+    { state: "IDLE", eventType: "question.rejected" },
     { state: "NEEDS_APPROVAL", eventType: "permission.asked" },
   ]);
-  assert.equal(transitionMarkCount, 5);
+  assert.equal(transitionMarkCount, 6);
   assert.equal(removeCallCount, 1);
 });
 
 test("permission requests remain visible until they are answered", async () => {
   const writtenRecords = [];
   const reporter = new plugin.OpenCodeStatusReporter({
-    stateMachine: new plugin.LifecycleStateMachine(),
-    eventMapper: new plugin.EventStateMapper(),
     recordBuilder: {
       markTransition() {},
-      build(sessionState) {
-        return { state: sessionState };
+      build(decision) {
+        return { state: decision.state };
       },
     },
     recordWriter: {
@@ -505,7 +476,6 @@ test("permission requests remain visible until they are answered", async () => {
     properties: { sessionID: "session-1", status: { type: "idle" } },
   });
 
-  assert.equal(reporter.stateMachine.currentState, plugin.SessionStatus.NEEDS_APPROVAL);
   assert.equal(writtenRecords.at(-1).state, plugin.SessionStatus.NEEDS_APPROVAL);
 
   await reporter.handle({
@@ -517,19 +487,16 @@ test("permission requests remain visible until they are answered", async () => {
     },
   });
 
-  assert.equal(reporter.stateMachine.currentState, plugin.SessionStatus.IDLE);
   assert.equal(writtenRecords.at(-1).state, plugin.SessionStatus.IDLE);
 });
 
 test("permission updates refresh the expanded preview", async () => {
   const writtenRecords = [];
   const reporter = new plugin.OpenCodeStatusReporter({
-    stateMachine: new plugin.LifecycleStateMachine(),
-    eventMapper: new plugin.EventStateMapper(),
     recordBuilder: {
       markTransition() {},
-      build(sessionState, event) {
-        return { state: sessionState, eventType: event.type };
+      build(decision, event) {
+        return { state: decision.state, eventType: event.type };
       },
     },
     recordWriter: {
@@ -558,8 +525,6 @@ test("permission updates refresh the expanded preview", async () => {
 function createReporter() {
   const records = [];
   const reporter = new plugin.OpenCodeStatusReporter({
-    stateMachine: new plugin.LifecycleStateMachine(),
-    eventMapper: new plugin.EventStateMapper(),
     recordBuilder: new plugin.StatusRecordBuilder({
       processId: 123,
       processStartedAt: 10,
@@ -577,6 +542,94 @@ function statusEvent(sessionID, type) {
   return { type: "session.status", properties: { sessionID, status: { type } } };
 }
 
+test("process status chooses permissions before responses and the oldest request within each kind", () => {
+  for (const permissionFirst of [false, true]) {
+    const status = new plugin.ProcessStatus();
+    const question = { type: "question.asked", properties: {
+      sessionID: "A", id: "shared-id", question: "Choose a branch",
+    } };
+    const permission = { type: "permission.asked", properties: {
+      sessionID: "A", id: "shared-id", permission: "edit", patterns: ["first.js"],
+    } };
+    for (const event of permissionFirst ? [permission, question] : [question, permission]) {
+      status.accept(event);
+    }
+    status.accept({ type: "permission.asked", properties: {
+      sessionID: "B", id: "permission-2", title: "Second permission",
+    } });
+    assert.deepEqual(status.decision, {
+      state: "NEEDS_APPROVAL", attention: true, sessionId: "A",
+      preview: "edit: first.js", eventType: "permission.asked",
+    });
+    status.accept({ ...permission, type: "permission.updated", properties: {
+      ...permission.properties, patterns: ["updated.js"],
+    } });
+    assert.equal(status.decision.preview, "edit: updated.js");
+    status.accept({ type: "permission.replied", properties: {
+      sessionID: "A", permissionID: "shared-id", reply: "once",
+    } });
+    assert.deepEqual(status.decision, {
+      state: "NEEDS_APPROVAL", attention: true, sessionId: "B",
+      preview: "Second permission", eventType: "permission.asked",
+    });
+    status.accept({ type: "permission.replied", properties: {
+      sessionID: "B", id: "permission-2", response: "reject",
+    } });
+    assert.deepEqual(status.decision, {
+      state: "WAITING", attention: true, sessionId: "A",
+      preview: "Choose a branch", eventType: "question.asked",
+    });
+  }
+});
+
+test("answering one request preserves other requests and resumed activity", () => {
+  for (const [asked, replied, rejected] of [
+    ["permission.asked", "permission.replied", "permission.replied"],
+    ["question.asked", "question.replied", "question.rejected"],
+  ]) {
+    const status = new plugin.ProcessStatus();
+    for (const sessionID of ["A", "B"]) {
+      status.accept({ type: asked, properties: { sessionID, id: "same-id", title: sessionID, question: sessionID } });
+    }
+    status.accept({ type: replied, properties: { sessionID: "A", id: "same-id", reply: "once" } });
+    assert.equal(status.decision.attention, true);
+    assert.equal(status.decision.sessionId, "B");
+    assert.equal(status.decision.preview, "B");
+    status.accept(statusEvent("A", "idle"));
+    status.accept({ type: rejected, properties: { sessionID: "B", id: "wrong-id", reply: "reject" } });
+    assert.equal(status.decision.attention, true, "a mismatched reply cannot clear a request");
+    status.accept({ type: replied, properties: { sessionID: "B", id: "same-id", reply: "once" } });
+    assert.equal(status.decision.state, "WORKING");
+    status.accept(statusEvent("A", "idle"));
+    status.accept(statusEvent("unrelated", "idle"));
+    assert.equal(status.decision.state, "WORKING", "a reply resumes work without needing a busy event");
+    status.accept(statusEvent("B", "idle"));
+    assert.equal(status.decision.state, "IDLE");
+    assert.equal(status.decision.attention, false);
+  }
+});
+
+test("rejecting another request cannot finish work resumed by an earlier reply", () => {
+  for (const [asked, replied, rejected] of [
+    ["permission.asked", "permission.replied", "permission.replied"],
+    ["question.asked", "question.replied", "question.rejected"],
+  ]) {
+    const status = new plugin.ProcessStatus();
+    for (const id of ["first", "second"]) {
+      status.accept({ type: asked, properties: { sessionID: "A", id } });
+    }
+    status.accept({ type: replied, properties: { sessionID: "A", id: "first", reply: "once" } });
+    assert.equal(status.decision.attention, true);
+    status.accept({ type: rejected, properties: { sessionID: "A", id: "second", reply: "reject" } });
+    assert.equal(status.decision.state, "WORKING");
+    assert.equal(status.decision.attention, false);
+    status.accept(statusEvent("unrelated", "idle"));
+    assert.equal(status.decision.state, "WORKING");
+    status.accept(statusEvent("A", "idle"));
+    assert.equal(status.decision.state, "IDLE");
+  }
+});
+
 test("a subagent finishing does not mark its busy parent as finished", async () => {
   const { reporter, records } = createReporter();
   await reporter.handle(statusEvent("parent", "busy"));
@@ -584,7 +637,6 @@ test("a subagent finishing does not mark its busy parent as finished", async () 
   await reporter.handle(statusEvent("child", "idle"));
   await reporter.handle({ type: "session.idle", properties: { sessionID: "child" } });
 
-  assert.equal(reporter.stateMachine.currentState, "WORKING");
   assert.deepEqual(records.map((record) => record.state), ["WORKING"]);
 
   await reporter.handle(statusEvent("parent", "idle"));
@@ -600,10 +652,11 @@ test("the process stays working until all busy sessions finish", async () => {
   await reporter.handle(statusEvent("child-2", "retry"));
   await reporter.handle(statusEvent("parent", "idle"));
   await reporter.handle(statusEvent("child-1", "idle"));
-  assert.deepEqual(records.map((record) => record.state), ["WORKING"]);
+  assert.ok(records.every((record) => record.state === "WORKING"));
+  assert.equal(records.at(-1).session_id, "child-2");
 
   await reporter.handle(statusEvent("child-2", "idle"));
-  assert.deepEqual(records.map((record) => record.state), ["WORKING", "IDLE"]);
+  assert.equal(records.at(-1).state, "IDLE");
 });
 
 test("an unrelated idle session cannot finish a busy session", async () => {

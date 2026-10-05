@@ -90,14 +90,6 @@ function questionPreview(properties) {
   return null;
 }
 
-function eventPreview(event) {
-  if (event?.type === "permission.asked" || event?.type === "permission.updated") {
-    return permissionPreview(event.properties);
-  }
-  if (event?.type === "question.asked") return questionPreview(event.properties);
-  return null;
-}
-
 function finiteNonNegativeNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
@@ -187,63 +179,6 @@ class ContextLimitResolver {
   }
 }
 
-const DEFAULT_TRANSITIONS = Object.freeze({
-  IDLE: Object.freeze(["WORKING", "WAITING", "NEEDS_APPROVAL"]),
-  WORKING: Object.freeze(["IDLE", "NEEDS_APPROVAL", "WAITING"]),
-  WAITING: Object.freeze([
-    "WORKING",
-    "NEEDS_APPROVAL",
-    "WAITING",
-    "IDLE",
-  ]),
-  NEEDS_APPROVAL: Object.freeze([
-    "WORKING",
-    "NEEDS_APPROVAL",
-    "WAITING",
-    "IDLE",
-  ]),
-});
-
-class TransitionPolicy {
-  constructor(transitions = DEFAULT_TRANSITIONS) {
-    this.transitions = new Map(
-      Object.entries(transitions).map(([currentState, targetStates]) => [
-        currentState,
-        new Set(targetStates),
-      ]),
-    );
-  }
-
-  canTransition(currentState, targetState) {
-    return (
-      currentState === targetState ||
-      this.transitions.get(currentState)?.has(targetState) === true
-    );
-  }
-}
-
-class LifecycleStateMachine {
-  constructor({
-    initialState = SessionStatus.IDLE,
-    policy = new TransitionPolicy(),
-  } = {}) {
-    this.policy = policy;
-    this.currentStateValue = initialState;
-  }
-
-  get currentState() {
-    return this.currentStateValue;
-  }
-
-  transitionTo(targetState) {
-    if (!this.policy.canTransition(this.currentStateValue, targetState)) {
-      return false;
-    }
-    this.currentStateValue = targetState;
-    return true;
-  }
-}
-
 class EventStateMapper {
   statusType(properties) {
     const status = properties?.status;
@@ -252,6 +187,10 @@ class EventStateMapper {
   }
 
   stateFor(event) {
+    return this.map(event).state;
+  }
+
+  map(event) {
     switch (event?.type) {
       case "session.status": {
         const status = this.statusType(event.properties || {});
@@ -263,29 +202,126 @@ class EventStateMapper {
           status === "generating" ||
           status === "streaming"
         ) {
-          return SessionStatus.WORKING;
+          return { state: SessionStatus.WORKING, activity: "busy" };
         }
-        if (status === "idle") return SessionStatus.IDLE;
-        return null;
+        if (status === "idle") return { state: SessionStatus.IDLE, activity: "idle" };
+        return { state: null };
       }
       case "session.idle":
-        return SessionStatus.IDLE;
+        return { state: SessionStatus.IDLE, activity: "idle" };
       case "question.asked":
-        return SessionStatus.WAITING;
+        return {
+          state: SessionStatus.WAITING, requestKind: "question", requestAction: "upsert",
+          preview: questionPreview(event.properties),
+        };
       case "permission.asked":
       case "permission.updated":
-        return SessionStatus.NEEDS_APPROVAL;
+        return {
+          state: SessionStatus.NEEDS_APPROVAL, requestKind: "permission", requestAction: "upsert",
+          preview: permissionPreview(event.properties),
+        };
       case "permission.replied": {
         const response = event.properties?.reply || event.properties?.response;
-        return response === "reject" ? SessionStatus.IDLE : SessionStatus.WORKING;
+        return {
+          state: response === "reject" ? SessionStatus.IDLE : SessionStatus.WORKING,
+          activity: response === "reject" ? null : "busy",
+          requestKind: "permission", requestAction: "remove",
+        };
       }
       case "question.replied":
-        return SessionStatus.WORKING;
+        return {
+          state: SessionStatus.WORKING, activity: "busy",
+          requestKind: "question", requestAction: "remove",
+        };
       case "question.rejected":
-        return SessionStatus.IDLE;
+        return {
+          state: SessionStatus.IDLE, requestKind: "question", requestAction: "remove",
+        };
       default:
-        return null;
+        return { state: null };
     }
+  }
+}
+
+// Owns the process-wide decision: outstanding permissions first, then questions,
+// oldest within each kind. Activity remains tracked while attention is displayed.
+class ProcessStatus {
+  constructor() {
+    this.eventMapper = new EventStateMapper();
+    this.workingSessions = new Set();
+    this.pendingRequests = new Map();
+    this.requestSequence = 0;
+    this.lastSessionId = null;
+    this.decision = this.aggregate();
+  }
+
+  aggregate() {
+    const requests = [...this.pendingRequests.values()].flatMap(
+      (sessionRequests) => [...sessionRequests.values()],
+    );
+    const request = requests
+      .filter((candidate) => candidate.state === SessionStatus.NEEDS_APPROVAL)
+      .sort((a, b) => a.sequence - b.sequence)[0] ||
+      requests.sort((a, b) => a.sequence - b.sequence)[0];
+    const state = request?.state ||
+      (this.workingSessions.size ? SessionStatus.WORKING : SessionStatus.IDLE);
+    return {
+      state,
+      attention: Boolean(request),
+      sessionId: request ? request.sessionId :
+        (this.workingSessions.size ? this.workingSessions.values().next().value : this.lastSessionId),
+      preview: request?.preview || DEFAULT_PREVIEWS[state],
+      eventType: request?.eventType || null,
+    };
+  }
+
+  accept(event) {
+    const properties = event?.properties || {};
+    const sessionId = properties.sessionID || properties.sessionId ||
+      properties.info?.sessionID || properties.info?.sessionId ||
+      ((event?.type === "session.created" || event?.type === "session.updated")
+        ? properties.info?.id : null) || null;
+    const sessionKey = sessionId ? String(sessionId) : null;
+    if (sessionKey) this.lastSessionId = sessionKey;
+    const mapped = this.eventMapper.map(event);
+    const isRequest = mapped.requestAction === "upsert";
+
+    if (mapped.requestAction) {
+      const requestId = properties.id || properties.permissionID ||
+        properties.permissionId || properties.requestID || properties.requestId ||
+        event.id || `request-${++this.requestSequence}`;
+      const requestKey = `${mapped.requestKind}:${requestId}`;
+      const requests = this.pendingRequests.get(sessionKey) || new Map();
+      if (isRequest) {
+        const previous = requests.get(requestKey);
+        requests.set(requestKey, {
+          sessionId: sessionKey,
+          state: mapped.state,
+          preview: mapped.preview || previous?.preview || DEFAULT_PREVIEWS[mapped.state],
+          eventType: event.type,
+          sequence: previous?.sequence ?? ++this.requestSequence,
+        });
+      } else {
+        requests.delete(requestKey);
+      }
+      if (requests.size) this.pendingRequests.set(sessionKey, requests);
+      else this.pendingRequests.delete(sessionKey);
+    }
+
+    // Replies that resume work count as busy even if no busy event follows.
+    // Rejecting a request is not an idle report for previously resumed work.
+    if (mapped.activity === "busy") this.workingSessions.add(sessionKey);
+    else if (mapped.activity === "idle") this.workingSessions.delete(sessionKey);
+
+    const previous = this.decision;
+    this.decision = this.aggregate();
+    return {
+      decision: this.decision,
+      stateChanged: previous.state !== this.decision.state,
+      changed: JSON.stringify(previous) !== JSON.stringify(this.decision),
+      recognized: mapped.state !== null,
+      requestUpdated: isRequest,
+    };
   }
 }
 
@@ -310,25 +346,8 @@ class StatusRecordBuilder {
     this.processStartedAt = processStartedAt;
     this.processStartTicks = processStartTicks;
     this.clock = clock;
-    this.sessionId = null;
     this.lastTransitionAt = processStartedAt;
-    this.lastSessionState = null;
-    this.preview = null;
     this.contextUsage = null;
-  }
-
-  updateSessionId(event) {
-    const properties = event?.properties || {};
-    const sessionId =
-      properties.sessionID ||
-      properties.sessionId ||
-      properties.info?.sessionID ||
-      properties.info?.sessionId ||
-      properties.info?.id ||
-      this.sessionId ||
-      null;
-    if (sessionId) this.sessionId = String(sessionId);
-    return this.sessionId;
   }
 
   markTransition() {
@@ -351,23 +370,13 @@ class StatusRecordBuilder {
     return JSON.stringify(previousContextUsage) !== JSON.stringify(nextContextUsage);
   }
 
-  build(sessionState, event) {
+  build(decision, event) {
     const currentTimestamp = this.clock();
-    const requiresAttention =
-      sessionState === SessionStatus.WAITING ||
-      sessionState === SessionStatus.NEEDS_APPROVAL;
-    const previewText = eventPreview(event);
-    if (previewText) {
-      this.preview = previewText;
-    } else if (this.lastSessionState !== sessionState || !this.preview) {
-      this.preview = DEFAULT_PREVIEWS[sessionState] || "idle";
-    }
-    this.lastSessionState = sessionState;
 
     return {
-      session_id: this.updateSessionId(event) || `pid:${this.processId}`,
+      session_id: decision.sessionId || `pid:${this.processId}`,
       project: this.project,
-      state: sessionState,
+      state: decision.state,
       tmux_pane: this.environment.TMUX_PANE || null,
       tmux_socket: this.environment.TMUX || null,
       source_pid: this.processId,
@@ -377,11 +386,11 @@ class StatusRecordBuilder {
         : { process_start_ticks: this.processStartTicks }),
       directory: this.directory,
       notification_id: null,
-      attention: requiresAttention,
-      attention_since: requiresAttention ? this.lastTransitionAt : null,
+      attention: decision.attention,
+      attention_since: decision.attention ? this.lastTransitionAt : null,
       last_transition_ts: this.lastTransitionAt || currentTimestamp,
-      preview: this.preview,
-      event_type: event?.type || null,
+      preview: decision.preview,
+      event_type: decision.eventType || event?.type || null,
       updated_at: currentTimestamp,
       ...(this.contextUsage || {}),
     };
@@ -450,104 +459,21 @@ class AtomicStatusRecordWriter {
 
 class OpenCodeStatusReporter {
   constructor({
-    stateMachine,
-    eventMapper,
+    processStatus = new ProcessStatus(),
     recordBuilder,
     recordWriter,
     contextLimitFor: resolveContextLimit = async () => null,
   }) {
-    this.stateMachine = stateMachine;
-    this.eventMapper = eventMapper;
+    this.processStatus = processStatus;
     this.recordBuilder = recordBuilder;
     this.recordWriter = recordWriter;
     this.resolveContextLimit = resolveContextLimit;
-    this.workingSessions = new Set();
-    this.pendingRequests = new Map();
-    this.requestSequence = 0;
     this.hasWrittenRecord = false;
   }
 
-  sessionIdFor(event) {
-    const properties = event?.properties || {};
-    return (
-      properties.sessionID ||
-      properties.sessionId ||
-      properties.info?.sessionID ||
-      properties.info?.sessionId ||
-      null
-    );
-  }
-
-  requestIdFor(event) {
-    const properties = event?.properties || {};
-    return (
-      properties.id ||
-      properties.permissionID ||
-      properties.permissionId ||
-      properties.requestID ||
-      properties.requestId ||
-      event?.id ||
-      `request-${++this.requestSequence}`
-    );
-  }
-
-  updatePendingRequest(event) {
-    const sessionId = this.sessionIdFor(event) || "__unknown__";
-    const requestId = String(this.requestIdFor(event));
-    const pendingRequestIds = this.pendingRequests.get(sessionId) || new Set();
-
-    if (event?.type === "permission.asked" || event?.type === "permission.updated" || event?.type === "question.asked") {
-      pendingRequestIds.add(requestId);
-      this.pendingRequests.set(sessionId, pendingRequestIds);
-      return;
-    }
-
-    if (event?.type !== "permission.replied" && event?.type !== "question.replied" && event?.type !== "question.rejected") {
-      return;
-    }
-
-    pendingRequestIds.delete(requestId);
-    if (pendingRequestIds.size === 0) this.pendingRequests.delete(sessionId);
-    else this.pendingRequests.set(sessionId, pendingRequestIds);
-  }
-
-  hasPendingRequest(event) {
-    const sessionId = this.sessionIdFor(event);
-    if (sessionId && this.pendingRequests.get(sessionId)?.size) return true;
-    if (!sessionId && this.pendingRequests.size) return true;
-    return false;
-  }
-
   async handle(event) {
-    let mappedState = this.eventMapper.stateFor(event);
-    const isIdleEvent =
-      event?.type === "session.idle" ||
-      (event?.type === "session.status" && mappedState === SessionStatus.IDLE);
-
-    // One process hosts multiple sessions, including subagents. An idle event
-    // finishes only its own session, not every session sharing the status file.
-    const sessionId = this.sessionIdFor(event) || "__unknown__";
-    if (event?.type === "session.status" && mappedState === SessionStatus.WORKING) {
-      this.workingSessions.add(sessionId);
-    } else if (isIdleEvent) {
-      this.workingSessions.delete(sessionId);
-      if (this.workingSessions.size || this.pendingRequests.size) return;
-    }
-
-    this.updatePendingRequest(event);
-    if (
-      (event?.type === "permission.replied" ||
-        event?.type === "question.replied" ||
-        event?.type === "question.rejected") &&
-      this.hasPendingRequest(event)
-    ) {
-      return;
-    }
-
-    if (mappedState === SessionStatus.IDLE && !isIdleEvent) {
-      this.workingSessions.delete(sessionId);
-      if (this.workingSessions.size) mappedState = SessionStatus.WORKING;
-    }
+    const update = this.processStatus.accept(event);
+    if (update.stateChanged) this.recordBuilder.markTransition();
 
     let contextUsageChanged = false;
     const messageInfo = event?.type === "message.updated" ? event.properties?.info : null;
@@ -564,28 +490,16 @@ class OpenCodeStatusReporter {
       );
     }
 
-    const isPreviewEvent =
-      event?.type === "permission.asked" ||
-      event?.type === "permission.updated" ||
-      event?.type === "question.asked";
-
-    let stateChanged = false;
-    if (mappedState && mappedState !== this.stateMachine.currentState) {
-      if (!this.stateMachine.transitionTo(mappedState)) return;
-      this.recordBuilder.markTransition();
-      stateChanged = true;
-    }
-
     if (
-      stateChanged ||
-      (mappedState && !this.hasWrittenRecord) ||
+      update.changed ||
+      (update.recognized && !this.hasWrittenRecord) ||
       event?.type === "session.created" ||
       event?.type === "session.updated" ||
-      isPreviewEvent ||
+      update.requestUpdated ||
       contextUsageChanged
     ) {
       this.recordWriter.write(
-        this.recordBuilder.build(this.stateMachine.currentState, event),
+        this.recordBuilder.build(this.processStatus.decision, event),
       );
       this.hasWrittenRecord = true;
     }
@@ -594,7 +508,7 @@ class OpenCodeStatusReporter {
   async initialize() {
     if (this.hasWrittenRecord) return;
     this.recordWriter.write(
-      this.recordBuilder.build(SessionStatus.IDLE, {
+      this.recordBuilder.build(this.processStatus.decision, {
         type: "server.connected",
         properties: {},
       }),
@@ -611,8 +525,6 @@ async function server({ project, directory, client }) {
   const recordPath = path.join(statusDir, `${process.pid}.json`);
   const contextLimitResolver = new ContextLimitResolver({ client });
   const reporter = new OpenCodeStatusReporter({
-    stateMachine: new LifecycleStateMachine(),
-    eventMapper: new EventStateMapper(),
     recordBuilder: new StatusRecordBuilder({
       project,
       directory,
@@ -637,11 +549,10 @@ export {
   AtomicStatusRecordWriter,
   ContextLimitResolver,
   EventStateMapper,
-  LifecycleStateMachine,
   OpenCodeStatusReporter,
+  ProcessStatus,
   SessionStatus,
   StatusRecordBuilder,
-  TransitionPolicy,
   contextLimitFor,
   contextTokensFor,
   readProcessStartTicks,
