@@ -4,6 +4,73 @@ from watch_test_support import FakeAttentionSource, FakeProcessSource, FakeTermi
 
 
 class SnapshotServiceTests(unittest.TestCase):
+    def test_same_directory_titles_use_creation_order_and_roman_numerals(self):
+        processes = {
+            200 - number: watch.ProcessInfo(200 - number, "/work/foo bar", number)
+            for number in range(1, 11)
+        }
+        collector = watch.SessionCollector(
+            FakeProcessSource(processes, {}), FakeAttentionSource({}), FakeTerminal()
+        )
+
+        sessions = watch.SnapshotService(collector).snapshot()["sessions"]
+        titles_by_pid = {session["source_pid"]: session["project"] for session in sessions}
+        self.assertEqual(
+            [titles_by_pid[200 - number] for number in range(1, 11)],
+            ["foo bar", "foo bar II", "foo bar III", "foo bar IV", "foo bar V",
+             "foo bar VI", "foo bar VII", "foo bar VIII", "foo bar IX", "foo bar X"],
+        )
+
+    def test_titles_stay_stable_as_sessions_start_and_close(self):
+        processes = {202: watch.ProcessInfo(202, "/work/alpha", 100)}
+        collector = watch.SessionCollector(
+            FakeProcessSource(processes, {}), FakeAttentionSource({}), FakeTerminal()
+        )
+        self.assertEqual(collector.collect()[0].project, "alpha")
+
+        processes[101] = watch.ProcessInfo(101, "/work/alpha", 200)
+        self.assertEqual(
+            {session.source_pid: session.project for session in collector.collect()},
+            {202: "alpha", 101: "alpha II"},
+        )
+        del processes[202]
+        self.assertEqual(collector.collect()[0].project, "alpha II")
+
+        # Reused PIDs represent a new process and receive a new suffix.
+        processes[202] = watch.ProcessInfo(202, "/work/alpha", 300)
+        self.assertEqual(
+            {session.source_pid: session.project for session in collector.collect()},
+            {101: "alpha II", 202: "alpha III"},
+        )
+        self.assertEqual(
+            {session.source_pid: session.project for session in collector.collect()},
+            {101: "alpha II", 202: "alpha III"},
+        )
+
+        processes.clear()
+        self.assertEqual(collector.collect(), [])
+        processes[303] = watch.ProcessInfo(303, "/work/alpha", 400)
+        self.assertEqual(collector.collect()[0].project, "alpha")
+
+    def test_numbering_groups_full_directories_and_ignores_nested_processes(self):
+        collector = watch.SessionCollector(
+            FakeProcessSource(
+                {
+                    101: watch.ProcessInfo(101, "/work/alpha", 100),
+                    202: watch.ProcessInfo(202, "/work/alpha", 200),
+                    303: watch.ProcessInfo(303, "/other/alpha", 300),
+                    404: watch.ProcessInfo(404, "/work/alpha", 400),
+                },
+                {202: [202, 101]},
+            ),
+            FakeAttentionSource({}),
+            FakeTerminal(),
+        )
+        self.assertEqual(
+            {session.source_pid: session.project for session in collector.collect()},
+            {101: "alpha", 303: "alpha", 404: "alpha II"},
+        )
+
     def test_exact_start_ticks_accept_status_despite_epoch_mismatch(self):
         collector = watch.SessionCollector(
             FakeProcessSource(

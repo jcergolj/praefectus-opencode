@@ -554,3 +554,103 @@ test("permission updates refresh the expanded preview", async () => {
     "permission.updated",
   ]);
 });
+
+function createReporter() {
+  const records = [];
+  const reporter = new plugin.OpenCodeStatusReporter({
+    stateMachine: new plugin.LifecycleStateMachine(),
+    eventMapper: new plugin.EventStateMapper(),
+    recordBuilder: new plugin.StatusRecordBuilder({
+      processId: 123,
+      processStartedAt: 10,
+      clock: () => 20,
+    }),
+    recordWriter: {
+      write: (record) => records.push(record),
+      remove() {},
+    },
+  });
+  return { reporter, records };
+}
+
+function statusEvent(sessionID, type) {
+  return { type: "session.status", properties: { sessionID, status: { type } } };
+}
+
+test("a subagent finishing does not mark its busy parent as finished", async () => {
+  const { reporter, records } = createReporter();
+  await reporter.handle(statusEvent("parent", "busy"));
+  await reporter.handle(statusEvent("child", "busy"));
+  await reporter.handle(statusEvent("child", "idle"));
+  await reporter.handle({ type: "session.idle", properties: { sessionID: "child" } });
+
+  assert.equal(reporter.stateMachine.currentState, "WORKING");
+  assert.deepEqual(records.map((record) => record.state), ["WORKING"]);
+
+  await reporter.handle(statusEvent("parent", "idle"));
+  await reporter.handle({ type: "session.idle", properties: { sessionID: "parent" } });
+  assert.deepEqual(records.map((record) => record.state), ["WORKING", "IDLE"]);
+  assert.equal(records.at(-1).session_id, "parent");
+});
+
+test("the process stays working until all busy sessions finish", async () => {
+  const { reporter, records } = createReporter();
+  await reporter.handle(statusEvent("parent", "busy"));
+  await reporter.handle(statusEvent("child-1", "busy"));
+  await reporter.handle(statusEvent("child-2", "retry"));
+  await reporter.handle(statusEvent("parent", "idle"));
+  await reporter.handle(statusEvent("child-1", "idle"));
+  assert.deepEqual(records.map((record) => record.state), ["WORKING"]);
+
+  await reporter.handle(statusEvent("child-2", "idle"));
+  assert.deepEqual(records.map((record) => record.state), ["WORKING", "IDLE"]);
+});
+
+test("an unrelated idle session cannot finish a busy session", async () => {
+  const { reporter, records } = createReporter();
+  await reporter.handle(statusEvent("active", "busy"));
+  await reporter.handle(statusEvent("restored", "idle"));
+  assert.deepEqual(records.map((record) => record.state), ["WORKING"]);
+  assert.equal(records.at(-1).session_id, "active");
+});
+
+test("rejecting a child request does not finish a busy parent", async () => {
+  for (const [asked, replied, replyProperties] of [
+    ["permission.asked", "permission.replied", { reply: "reject" }],
+    ["question.asked", "question.rejected", {}],
+  ]) {
+    const { reporter, records } = createReporter();
+    await reporter.handle(statusEvent("parent", "busy"));
+    await reporter.handle(statusEvent("child", "busy"));
+    await reporter.handle({
+      type: asked,
+      properties: { sessionID: "child", id: "request-1" },
+    });
+    await reporter.handle({
+      type: replied,
+      properties: { sessionID: "child", id: "request-1", ...replyProperties },
+    });
+    await reporter.handle(statusEvent("child", "idle"));
+    assert.deepEqual(records.map((record) => record.state), [
+      "WORKING", asked === "question.asked" ? "WAITING" : "NEEDS_APPROVAL", "WORKING",
+    ]);
+    await reporter.handle(statusEvent("parent", "idle"));
+    assert.equal(records.at(-1).state, "IDLE");
+  }
+});
+
+test("an idle event from another session cannot clear a pending request", async () => {
+  const { reporter, records } = createReporter();
+  await reporter.handle({
+    type: "question.asked",
+    properties: { sessionID: "child", id: "question-1" },
+  });
+  await reporter.handle(statusEvent("parent", "idle"));
+  assert.deepEqual(records.map((record) => record.state), ["WAITING"]);
+  await reporter.handle({
+    type: "question.replied",
+    properties: { sessionID: "child", id: "question-1" },
+  });
+  await reporter.handle(statusEvent("child", "idle"));
+  assert.deepEqual(records.map((record) => record.state), ["WAITING", "WORKING", "IDLE"]);
+});

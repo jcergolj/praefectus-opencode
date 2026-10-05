@@ -461,6 +461,7 @@ class OpenCodeStatusReporter {
     this.recordBuilder = recordBuilder;
     this.recordWriter = recordWriter;
     this.resolveContextLimit = resolveContextLimit;
+    this.workingSessions = new Set();
     this.pendingRequests = new Map();
     this.requestSequence = 0;
     this.hasWrittenRecord = false;
@@ -518,12 +519,20 @@ class OpenCodeStatusReporter {
   }
 
   async handle(event) {
-    const mappedState = this.eventMapper.stateFor(event);
+    let mappedState = this.eventMapper.stateFor(event);
     const isIdleEvent =
       event?.type === "session.idle" ||
       (event?.type === "session.status" && mappedState === SessionStatus.IDLE);
 
-    if (isIdleEvent && this.hasPendingRequest(event)) return;
+    // One process hosts multiple sessions, including subagents. An idle event
+    // finishes only its own session, not every session sharing the status file.
+    const sessionId = this.sessionIdFor(event) || "__unknown__";
+    if (event?.type === "session.status" && mappedState === SessionStatus.WORKING) {
+      this.workingSessions.add(sessionId);
+    } else if (isIdleEvent) {
+      this.workingSessions.delete(sessionId);
+      if (this.workingSessions.size || this.pendingRequests.size) return;
+    }
 
     this.updatePendingRequest(event);
     if (
@@ -533,6 +542,11 @@ class OpenCodeStatusReporter {
       this.hasPendingRequest(event)
     ) {
       return;
+    }
+
+    if (mappedState === SessionStatus.IDLE && !isIdleEvent) {
+      this.workingSessions.delete(sessionId);
+      if (this.workingSessions.size) mappedState = SessionStatus.WORKING;
     }
 
     let contextUsageChanged = false;

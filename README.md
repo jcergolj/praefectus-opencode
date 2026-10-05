@@ -30,6 +30,10 @@ Where:
 
 Click any counter to see the matching sessions, then click a session to focus its terminal or tmux pane.
 
+Sessions in the same directory get Roman-numeral suffixes in creation order:
+`foo bar`, `foo bar II`, `foo bar III`, and so on. Titles stay stable when another
+session closes; numbering resets once all sessions in that directory close.
+
 ## Features
 
 * Live status of all top-level OpenCode sessions
@@ -133,6 +137,10 @@ Praefectus can notify you when an OpenCode session:
 * finishes working
 
 Notifications are enabled by default.
+
+A process is considered finished only after all of its busy sessions become
+idle. A subagent finishing does not trigger a finished notification while its
+parent session is still working.
 
 Clicking a notification focuses the corresponding session.
 
