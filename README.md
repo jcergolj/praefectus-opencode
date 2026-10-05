@@ -138,6 +138,11 @@ Praefectus can notify you when an OpenCode session:
 
 Notifications are enabled by default.
 
+The first valid watcher snapshot establishes a silent baseline. Repeated states
+do not notify again. While notifications are disabled, snapshots still advance
+transition memory, so re-enabling them does not replay old changes. Sessions
+that disappear are removed from that memory.
+
 A process is considered finished only after all of its busy sessions become
 idle. A subagent finishing does not trigger a finished notification while its
 parent session is still working.
@@ -172,11 +177,31 @@ Run the watcher tests:
 python3 -m unittest discover -s tests -v
 ```
 
-Run the OpenCode bridge tests:
+Run the OpenCode bridge and notification tests (Node.js and Python 3 required):
 
 ```bash
-node --test tests/test_opencode_plugin.mjs
+node --test tests/test_*.mjs
 ```
+
+Verify the complete suite without running the desktop:
+
+```bash
+python3 -m unittest discover -s tests -v && node --test tests/test_*.mjs
+```
+
+`NotificationPolicy.js` owns the silent baseline, successive-snapshot memory,
+and enablement rules. Each widget creates a policy with `create()` and calls
+`accept(jsonLine, notificationsEnabled)`, which returns `{ snapshot, decisions }`.
+Each decision contains an `eventType` (`attention` or `finished`), `sessionId`,
+and `sourcePid`. Identity follows the source PID, falling back to the session ID.
+Malformed JSON, invalid counts or session fields, missing identities, and
+duplicate identities throw without advancing the last accepted baseline.
+
+The tests execute the same JavaScript imported by QML. They cover policy traces,
+the desktop command builder in `NotificationDelivery.js` (generic text, bounded
+timeout, and focus target), and a composed trace through bridge-produced runtime
+records, watcher snapshots, and notification decisions. QML owns rendering and
+notification process execution.
 
 ## License
 MIT

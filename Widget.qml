@@ -4,6 +4,8 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "NotificationPolicy.js" as NotificationPolicy
+import "NotificationDelivery.js" as NotificationDelivery
 
 // OpenCode Praefectus Fabrum: compact live agent counts for the Omarchy bar.
 // Counts are clickable; the total count toggles the full session list.
@@ -32,24 +34,16 @@ Panel {
   property bool settingsOpen: false
   property int selectedSessionIndex: 0
   property double currentTimeMs: Date.now()
-  property var previousSessionsByIdentity: ({})
-  property bool hasPreviousSnapshot: false
+  readonly property var notificationPolicy: NotificationPolicy.create()
 
   function setting(settingName, defaultValue) {
     var settingValue = root.settings ? root.settings[settingName] : undefined
     return settingValue === undefined || settingValue === null ? defaultValue : settingValue
   }
 
-  function boundedNotificationTimeout(value) {
-    var timeoutSeconds = Number(value)
-    if (!isFinite(timeoutSeconds)) timeoutSeconds = 10
-    return Math.max(8, Math.min(30, Math.round(timeoutSeconds)))
-  }
-
   readonly property bool coloredCounts: String(setting("coloredCounts", true)) !== "false"
   readonly property bool notificationsEnabled: String(setting("notificationsEnabled", true)) !== "false"
-  readonly property int notificationTimeoutSeconds: boundedNotificationTimeout(setting("notificationTimeoutSeconds", 10))
-  readonly property int notificationTimeoutMs: notificationTimeoutSeconds * 1000
+  readonly property int notificationTimeoutSeconds: NotificationDelivery.boundedTimeoutSeconds(setting("notificationTimeoutSeconds", 10))
   readonly property var snapshot: liveSnapshot || emptySnapshot
   readonly property var counts: snapshot.counts || emptySnapshot.counts
   readonly property var sessions: snapshot.sessions || []
@@ -71,7 +65,7 @@ Panel {
   }
 
   function setNotificationTimeout(seconds) {
-    updateSetting("notificationTimeoutSeconds", boundedNotificationTimeout(seconds))
+    updateSetting("notificationTimeoutSeconds", NotificationDelivery.boundedTimeoutSeconds(seconds))
   }
 
   function countFor(statusBucket) {
@@ -213,85 +207,22 @@ Panel {
     return "context " + Math.round(contextPercentage) + "% used"
   }
 
-  function sessionIdentity(session) {
-    if (!session) return ""
-    if (session.source_pid !== undefined && session.source_pid !== null && String(session.source_pid) !== "")
-      return "pid:" + String(session.source_pid)
-    if (session.session_id !== undefined && session.session_id !== null && String(session.session_id) !== "")
-      return "session:" + String(session.session_id)
-    return ""
-  }
-
-  function sessionsByIdentity(sessionList) {
-    var records = {}
-    for (var index = 0; index < sessionList.length; index++) {
-      var session = sessionList[index]
-      var identity = sessionIdentity(session)
-      if (identity) records[identity] = session
-    }
-    return records
-  }
-
-  function requiresAttention(session) {
-    if (!session) return false
-    return !!session.attention || session.state === "WAITING" || session.state === "NEEDS_APPROVAL"
-  }
-
-  function notificationEvent(previousSession, currentSession) {
-    if (!currentSession) return ""
-    if (requiresAttention(currentSession) && !requiresAttention(previousSession)) return "attention"
-    if (previousSession && previousSession.state === "WORKING" && currentSession.state === "IDLE")
-      return "finished"
-    return ""
-  }
-
-  function notificationSummary(eventType) {
-    return eventType === "attention"
-      ? "OpenCode session needs attention"
-      : "OpenCode session finished"
-  }
-
-  function notificationBody() {
-    return "OpenCode session status changed"
-  }
-
-  function sendNotification(eventType, session) {
-    if (!notificationsEnabled || !session) return
+  function sendNotification(decision) {
     var notificationProcess = desktopNotificationProcess.createObject(root, {
-      targetSessionId: session.session_id === undefined || session.session_id === null ? "" : String(session.session_id),
-      targetSourcePid: session.source_pid === undefined || session.source_pid === null ? "" : String(session.source_pid),
-      notificationSummary: notificationSummary(eventType),
-      notificationBody: notificationBody()
+      notificationCommand: NotificationDelivery.command(decision, root.watcherPath, root.notificationTimeoutSeconds)
     })
     if (!notificationProcess) console.warn("praefectus-opencode", "could not create notification process")
   }
 
-  function notifyForTransitions(currentSessions) {
-    if (!hasPreviousSnapshot) return
-    var currentSessionsByIdentity = sessionsByIdentity(currentSessions)
-    for (var identity in currentSessionsByIdentity) {
-      var currentSession = currentSessionsByIdentity[identity]
-      var eventType = notificationEvent(previousSessionsByIdentity[identity], currentSession)
-      if (eventType) sendNotification(eventType, currentSession)
-    }
-    previousSessionsByIdentity = currentSessionsByIdentity
-  }
-
   function parseState(inputText) {
     try {
-      var parsedSnapshot = JSON.parse(String(inputText || ""))
-      if (parsedSnapshot && typeof parsedSnapshot === "object") {
-        var currentSessions = Array.isArray(parsedSnapshot.sessions) ? parsedSnapshot.sessions : []
-        liveSnapshot = parsedSnapshot
-        currentTimeMs = Date.now()
-        if (selectedSessionIndex >= visibleSessions.length)
-          selectedSessionIndex = Math.max(0, visibleSessions.length - 1)
-        if (!hasPreviousSnapshot) {
-          previousSessionsByIdentity = sessionsByIdentity(currentSessions)
-          hasPreviousSnapshot = true
-        }
-        else notifyForTransitions(currentSessions)
-      }
+      var result = notificationPolicy.accept(String(inputText || ""), notificationsEnabled)
+      liveSnapshot = result.snapshot
+      currentTimeMs = Date.now()
+      if (selectedSessionIndex >= visibleSessions.length)
+        selectedSessionIndex = Math.max(0, visibleSessions.length - 1)
+      for (var index = 0; index < result.decisions.length; index++)
+        sendNotification(result.decisions[index])
     } catch (parseError) {
       console.warn("praefectus-opencode", "bad state line", parseError)
     }
@@ -314,26 +245,9 @@ Panel {
 
     Process {
       id: notificationProcess
-      property string targetSessionId: ""
-      property string targetSourcePid: ""
-      property string notificationSummary: ""
-      property string notificationBody: ""
+      property var notificationCommand: []
 
-      command: [
-        "omarchy-notification-send",
-        "--app-name",
-        "OpenCode",
-        "--urgency",
-        "normal",
-        "--expire-time",
-        String(root.notificationTimeoutMs),
-        notificationSummary,
-        notificationBody,
-        "--exec",
-        root.watcherPath,
-        "--focus",
-        targetSourcePid !== "" ? targetSourcePid : targetSessionId
-      ]
+      command: notificationCommand
       running: true
 
       stderr: SplitParser {
