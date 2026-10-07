@@ -49,6 +49,34 @@ session closes; numbering resets once all sessions in that directory close.
 
 ## Installation
 
+### OpenCode version compatibility
+
+**Praefectus release numbers are not OpenCode version numbers.** In particular,
+Praefectus `v2` is an OpenCode **V1** release, not an OpenCode V2 bridge.
+
+| Praefectus release / revision | Commit | OpenCode compatibility |
+| --- | --- | --- |
+| [v1](https://github.com/jcergolj/praefectus-opencode/releases/tag/v1) | [`845262e`](https://github.com/jcergolj/praefectus-opencode/commit/845262e) | V1 only |
+| [v2](https://github.com/jcergolj/praefectus-opencode/releases/tag/v2) | [`b66db00`](https://github.com/jcergolj/praefectus-opencode/commit/b66db00) | V1 only |
+| [v3](https://github.com/jcergolj/praefectus-opencode/releases/tag/v3) | [`385084f`](https://github.com/jcergolj/praefectus-opencode/commit/385084f) | V1 only |
+| [v4](https://github.com/jcergolj/praefectus-opencode/releases/tag/v4) — last V1-only release | [`e1660c6`](https://github.com/jcergolj/praefectus-opencode/commit/e1660c6) | V1 only |
+| Dual-version compatibility update — **unreleased** | [`4c47776`](https://github.com/jcergolj/praefectus-opencode/commit/4c47776) | V1 **1.18.29+** and V2 full-screen TUI (smoke-tested on **2.0.24**) |
+
+The same bundled source supports both versions; you do not need separate
+Praefectus builds. OpenCode selects the V1 server adapter or V2 terminal adapter.
+The status-file format, watcher, focus commands, and notification policy are
+shared. Installation differs because V2 runs a shared background server and
+uses a separate terminal plugin API. Older V1 versions are not supported by
+the current object entrypoint.
+
+For OpenCode V2, use a checkout containing `plugin/tui.js` and
+`plugin/package.json`; **none of the existing `v1`–`v4` tags includes it**.
+V2 support starts at commit `4c47776`; use that commit or a descendant.
+For a pinned V1-only checkout, use `git checkout v4` (or the exact commit
+`e1660c656aa7b3f8fcf9f7ce4a451f78a1c6c608`) in a clean clone.
+
+### Omarchy widget
+
 Install the Omarchy plugin:
 
 ```bash
@@ -58,9 +86,40 @@ omarchy plugin add https://github.com/jcergolj/praefectus-opencode.git --enable
 The widget detects running OpenCode processes and idle sessions without
 installing anything into OpenCode. OpenCode's status bridge is an optional,
 separate integration: install it only if you want live session states from
-OpenCode events.
+OpenCode's public APIs.
 
-To opt in, explicitly link the bundled bridge into OpenCode's plugin directory:
+### OpenCode V2 status bridge
+
+Merge this entry into the `plugins` array in `~/.config/opencode/cli.json`
+(`$XDG_CONFIG_HOME/opencode/cli.json` if set), preserving other settings/plugins:
+
+```json
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": ["/path/to/praefectus-opencode/plugin"]
+}
+```
+
+Use the absolute path to the bundled **directory**, not `plugin/index.js`.
+For a standard Omarchy installation this is
+`/home/YOUR_USER/.config/omarchy/plugins/praefectus.opencode/plugin`.
+Restart the OpenCode TUI after adding it. No background-service restart is needed.
+
+The V2 bridge runs in each local terminal and reads OpenCode's public CLI data
+every 500 ms. It aggregates the open tabs and their subagents (or the current
+session family when tabs are disabled), not every session on the shared server.
+Restored busy sessions, permissions, and response forms are included. The
+background service is not counted as another terminal.
+
+V2 live status currently covers the **full-screen TUI**, including
+`--standalone` and connections to remote servers. `opencode mini`, headless
+`opencode run`, and the browser/desktop UI do not load this TUI adapter.
+Each counter entry represents a local terminal process, not an individual tab;
+focusing an entry focuses that terminal/tmux pane, without switching its tab.
+
+### OpenCode V1 status bridge
+
+For OpenCode **1.18.29+**, explicitly link the bundled V1 entrypoint:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
@@ -72,9 +131,16 @@ plugin. The link points to the Marketplace plugin's bundled source; removing
 the Omarchy plugin removes that source, so OpenCode can no longer load the
 bridge. Restart OpenCode sessions after installing the bridge.
 
+When upgrading from OpenCode V1 to V2, add the V2 `cli.json` entry above.
+The old file symlink alone does **not** load the V2 terminal adapter; you can
+remove it with the command below. Both integrations remain opt-in.
+
 ## Uninstall
 
-If you opted into the OpenCode status bridge, remove its link:
+For the V2 bridge, remove only the Praefectus entry from `cli.json`'s `plugins`
+array, leaving other plugins and settings intact.
+
+For the V1 bridge, remove its link:
 
 ```bash
 rm ~/.config/opencode/plugins/praefectus-opencode.js
@@ -162,9 +228,13 @@ The notification timeout can be configured between 8 and 30 seconds from the wid
 
 ## How It Works
 
-Praefectus watches top-level `opencode` processes running on the machine.
+Praefectus watches top-level `opencode` / `opencode.exe` terminal processes
+running on the machine, excluding background server/service and API processes.
 
-The bundled OpenCode plugin publishes lightweight per-process status information. Status files are stored under `$XDG_RUNTIME_DIR`, falling back to `~/.cache` when necessary.
+The bundled bridge publishes lightweight per-process status information: V1
+uses server event hooks, while V2 uses public data from the local TUI. V2 never
+associates the shared server's PID with a terminal. Status files are stored under
+`$XDG_RUNTIME_DIR`, falling back to `~/.cache` when necessary.
 
 Praefectus does **not** scrape terminal output and does **not** access OpenCode's private storage.
 
