@@ -68,6 +68,31 @@ class ProcessSourceTests(unittest.TestCase):
         tail = " ".join(["S", str(parent), *(["0"] * 17), str(start_ticks)])
         path.write_text(f"123 (opencode){tail}")
 
+    def test_v2_terminal_clients_are_counted_but_shared_services_are_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proc_root = Path(directory)
+            processes = [
+                (101, "opencode", ["opencode", "--auto"]),
+                (102, "opencode.exe", ["/bin/opencode.exe", "--standalone"]),
+                (103, "opencode", ["opencode", "serve", "--service"]),
+                (104, "opencode.exe", ["/bin/opencode.exe", "serve", "--service"]),
+                (105, "opencode", ["opencode", "api", "get", "/api/info"]),
+                (106, "opencode", ["opencode", "service", "status"]),
+            ]
+            for pid, comm, arguments in processes:
+                process_dir = proc_root / str(pid)
+                process_dir.mkdir()
+                (process_dir / "comm").write_text(comm)
+                (process_dir / "cmdline").write_bytes("\0".join(arguments).encode() + b"\0")
+                self.write_stat(process_dir / "stat", 1, 200)
+                (process_dir / "cwd").symlink_to(proc_root, target_is_directory=True)
+
+            source = watch.ProcProcessSource(proc_root, lambda: 1000, 100)
+            self.assertEqual(source.opencode_pids(), {101, 102})
+            self.assertIsNotNone(source.inspect(102))
+            for pid in [103, 104, 105, 106]:
+                self.assertIsNone(source.inspect(pid))
+
     def test_proc_source_discovers_and_inspects_opencode_processes(self):
         with tempfile.TemporaryDirectory() as directory:
             proc_root = Path(directory)

@@ -521,7 +521,7 @@ class OpenCodeStatusReporter {
   }
 }
 
-async function server({ project, directory, client }) {
+function createStatusReporter({ project, directory, client }) {
   const recordPath = path.join(statusDir, `${process.pid}.json`);
   const contextLimitResolver = new ContextLimitResolver({ client });
   const reporter = new OpenCodeStatusReporter({
@@ -537,6 +537,11 @@ async function server({ project, directory, client }) {
     }),
     contextLimitFor: (info) => contextLimitResolver.limitFor(info),
   });
+  return reporter;
+}
+
+async function server(context) {
+  const reporter = createStatusReporter(context);
   await reporter.initialize();
 
   return {
@@ -555,10 +560,14 @@ export {
   StatusRecordBuilder,
   contextLimitFor,
   contextTokensFor,
+  createStatusReporter,
   readProcessStartTicks,
 };
 
 export default {
   id: "praefectus-opencode",
   server,
+  // V2 status belongs to the terminal process, not the shared server. The
+  // sibling tui entrypoint owns reporting; never publish the server's PID.
+  setup() {},
 };

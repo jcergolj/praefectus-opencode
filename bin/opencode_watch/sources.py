@@ -118,6 +118,19 @@ class ProcProcessSource:
         except OSError:
             return None
 
+    def _is_opencode(self, pid: int) -> bool:
+        if self._comm(pid) not in ("opencode", "opencode.exe"):
+            return False
+        try:
+            with open(os.path.join(self.proc_root, str(pid), "cmdline"), "rb") as command_file:
+                arguments = command_file.read().split(b"\0")
+            # V2's shared service is independent of its terminal clients. It
+            # must not create an extra session/counter or become a focus target.
+            return len(arguments) < 2 or arguments[1] not in (b"serve", b"service", b"api")
+        except OSError:
+            # Preserve V1 discovery and the existing uncertain-inspection path.
+            return True
+
     def opencode_pids(self) -> Set[int]:
         opencode_pids: Set[int] = set()
         try:
@@ -133,7 +146,7 @@ class ProcProcessSource:
                     process_pid = int(process_entry.name)
                 except ValueError:
                     continue
-                if self._comm(process_pid) == "opencode":
+                if self._is_opencode(process_pid):
                     opencode_pids.add(process_pid)
         return opencode_pids
 
@@ -151,7 +164,7 @@ class ProcProcessSource:
         return ancestor_pids
 
     def inspect(self, pid: int) -> Optional[ProcessInfo]:
-        if self._comm(pid) != "opencode":
+        if not self._is_opencode(pid):
             return None
         try:
             cwd_path = os.path.join(self.proc_root, str(pid), "cwd")
