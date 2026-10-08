@@ -14,6 +14,6 @@ function command(decision, watcherPath, timeoutSeconds) {
     decision.eventType === "attention" ? "OpenCode session needs attention" : "OpenCode session finished",
     "OpenCode session status changed",
     "--exec", watcherPath,
-    "--focus", decision.sourcePid !== "" ? decision.sourcePid : decision.sessionId
+    "--focus", decision.focusTarget || (decision.sourcePid !== "" ? decision.sourcePid : decision.sessionId)
   ]
 }

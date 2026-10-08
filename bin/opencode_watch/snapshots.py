@@ -17,6 +17,7 @@ from .domain import (
     TmuxPane,
 )
 from .tracking import SessionTracker, TrackedSession
+from .session_records import SessionRecords
 
 
 def roman_number(number: int) -> str:
@@ -84,24 +85,54 @@ class SessionCollector:
         self.terminal_source = terminal_source
         self.session_factory = session_factory or SessionFactory()
         self.tracker = tracker or SessionTracker()
+        self.session_records = SessionRecords(self.session_factory)
+        self.warnings = []
 
     def collect(self) -> List[Session]:
         status_records = self.attention_source.read()
         opencode_pids = self.process_source.opencode_pids()
         panes = self.terminal_source.panes()
         sessions: List[Session] = []
+        self.warnings = []
+        v2_pids = set()
         active_pids: Set[int] = set()
-        processes: List[Tuple[ProcessInfo, Optional[TrackedSession]]] = []
+        processes: List[Tuple[ProcessInfo, Optional[TrackedSession], bool]] = []
         for pid in opencode_pids:
             process = self.process_source.inspect(pid)
             if process is not None:
-                processes.append((process, None))
+                processes.append((process, None, False))
             else:
+                previous = self.session_records.by_pid.get(pid)
+                if previous is not None:
+                    processes.append((previous[0], None, True))
+                    continue
                 last_observation = self.tracker.last_observation(pid)
                 if last_observation is not None:
-                    processes.append((last_observation.process, last_observation.session))
+                    processes.append((last_observation.process, last_observation.session, False))
 
-        for process, frozen in sorted(processes, key=lambda item: (item[0].started_at, item[0].pid)):
+        for process, frozen, frozen_v2 in sorted(processes, key=lambda item: (item[0].started_at, item[0].pid)):
+            ancestors = self.process_source.ancestors(process.pid)
+            if any(pid in opencode_pids for pid in ancestors[1:]):
+                continue
+            envelope = status_records.get(process.pid, {})
+            retained = self.session_records.retained(process)
+            if frozen_v2:
+                envelope = retained or {}
+            if envelope.get("bridge_version") == 2:
+                if self.session_records.observe(process, envelope):
+                    v2_pids.add(process.pid)
+                    self.warnings.extend(f"OpenCode PID {process.pid}: {warning}"
+                                         for warning in envelope.get("warnings", []) if isinstance(warning, str))
+                else:
+                    self.warnings.append(f"OpenCode PID {process.pid}: invalid or stale V2 status bridge data")
+                continue
+            if retained is not None:
+                v2_pids.add(process.pid)
+                self.warnings.append(f"OpenCode PID {process.pid}: missing V2 status bridge data (retaining last snapshot)")
+                continue
+            if process.bridge_required:
+                self.warnings.append(f"OpenCode PID {process.pid}: missing V2 status bridge data; install/restart the TUI bridge")
+                continue
             session = self._collect_process(
                 process,
                 opencode_pids,
@@ -115,7 +146,8 @@ class SessionCollector:
             sessions.append(session)
 
         self.tracker.remove_missing(active_pids)
-        return sorted(sessions, key=lambda session: session.source_pid)
+        sessions.extend(self.session_records.collect(v2_pids, panes, self.process_source.ancestors))
+        return sorted(sessions, key=lambda session: (session.source_pid, session.tracking_id))
 
     def _collect_process(
         self,
@@ -164,8 +196,15 @@ class SnapshotService:
             count_bucket = STATUS_COUNT_BUCKETS.get(session["state"])
             if count_bucket:
                 session_counts[count_bucket] += 1
-        return {
+        snapshot = {
             "generated_ts": self.clock(),
             "counts": session_counts,
             "sessions": sessions,
         }
+        completed = getattr(getattr(self.collector, "session_records", None), "completed", [])
+        warnings = getattr(self.collector, "warnings", [])
+        if completed:
+            snapshot["completed_sessions"] = completed
+        if warnings:
+            snapshot["warnings"] = warnings
+        return snapshot

@@ -28,7 +28,8 @@ Where:
 * `1` — waiting for permission
 * `1` — idle
 
-Click any counter to see the matching sessions, then click a session to focus its terminal or tmux pane.
+Click any counter to see the matching sessions, then click a session to focus its
+terminal or tmux pane. On V2, this also selects that exact OpenCode session.
 
 Sessions in the same directory get Roman-numeral suffixes in creation order:
 `foo bar`, `foo bar II`, `foo bar III`, and so on. Titles stay stable when another
@@ -83,10 +84,11 @@ Install the Omarchy plugin:
 omarchy plugin add https://github.com/jcergolj/praefectus-opencode.git --enable
 ```
 
-The widget detects running OpenCode processes and idle sessions without
-installing anything into OpenCode. OpenCode's status bridge is an optional,
-separate integration: install it only if you want live session states from
-OpenCode's public APIs.
+The widget and OpenCode's status bridge are separate integrations. V1 can detect
+terminal processes without the bridge (as idle); its bridge adds live states.
+**V2 requires the TUI bridge** to discover individual open sessions. A V2 terminal
+without valid bridge data produces a `!` warning in the bar (details in the
+session panel), not an invented idle entry.
 
 ### OpenCode V2 status bridge
 
@@ -106,16 +108,31 @@ For a standard Omarchy installation this is
 Restart the OpenCode TUI after adding it. No background-service restart is needed.
 
 The V2 bridge runs in each local terminal and reads OpenCode's public CLI data
-every 500 ms. It aggregates the open tabs and their subagents (or the current
-session family when tabs are disabled), not every session on the shared server.
-Restored busy sessions, permissions, and response forms are included. The
-background service is not counted as another terminal.
+every 500 ms. Each open top-level tab is counted separately, including idle tabs.
+With tabs disabled, it tracks the displayed top-level session. Saved history and
+unrelated sessions on the shared server are excluded; empty terminals count as
+zero. Subagents are never tracked or aggregated into the parent's status.
+Restored busy sessions and their own permissions/response forms are included.
+The background service is not counted as another terminal.
+
+The same session open in several terminals counts once, with those terminals
+retained as focus alternatives. Identity is scoped to the connected server's
+public server-info fingerprint, not to the terminal PID.
+
+Closing a working tab keeps its session visible until it finishes, including
+while it awaits permission or a response. Clicking it reopens the exact session.
+Closed-tab completion is delivered separately from the counted entries, so its
+notification remains clickable after the entry disappears. Reopening is possible
+while at least one of its owning TUIs is still running; notifications never attach
+to a replacement process that reused an old PID.
 
 V2 live status currently covers the **full-screen TUI**, including
 `--standalone` and connections to remote servers. `opencode mini`, headless
 `opencode run`, and the browser/desktop UI do not load this TUI adapter.
-Each counter entry represents a local terminal process, not an individual tab;
-focusing an entry focuses that terminal/tmux pane, without switching its tab.
+Each counter entry represents a unique top-level session. Entry clicks,
+notification clicks, and keyboard cycling switch to that exact session through
+a user-private local Unix socket into the owning TUI. Tabs are focused/reopened
+using OpenCode's public tabs API, or its router when tabs are disabled.
 
 ### OpenCode V1 status bridge
 
@@ -209,11 +226,13 @@ do not notify again. While notifications are disabled, snapshots still advance
 transition memory, so re-enabling them does not replay old changes. Sessions
 that disappear are removed from that memory.
 
-A process is considered finished only after all of its busy sessions become
-idle. A subagent finishing does not trigger a finished notification while its
-parent session is still working.
+On V2, each top-level session notifies independently: another session working
+in the same terminal cannot suppress its completion or attention notification.
+Subagent events never affect parent status, counters, or notifications. Duplicate
+terminal views of the same session do not produce duplicate notifications.
 
-When one OpenCode process hosts multiple sessions, outstanding requests take
+On V1, a process finishes only after all of its busy sessions become idle.
+When one V1 OpenCode process hosts multiple sessions, outstanding requests take
 precedence over busy or idle events from any session. Permission requests take
 precedence over response requests; within each kind, the oldest outstanding
 request supplies the displayed session and preview. Updating a request keeps its
@@ -231,8 +250,9 @@ The notification timeout can be configured between 8 and 30 seconds from the wid
 Praefectus watches top-level `opencode` / `opencode.exe` terminal processes
 running on the machine, excluding background server/service and API processes.
 
-The bundled bridge publishes lightweight per-process status information: V1
-uses server event hooks, while V2 uses public data from the local TUI. V2 never
+The bundled bridge publishes lightweight runtime status information: V1
+uses process-wide server event hooks, while V2 publishes independent session
+records in a per-terminal envelope using public data from the local TUI. V2 never
 associates the shared server's PID with a terminal. Status files are stored under
 `$XDG_RUNTIME_DIR`, falling back to `~/.cache` when necessary.
 
@@ -240,9 +260,11 @@ Praefectus does **not** scrape terminal output and does **not** access OpenCode'
 
 Processes are matched using Linux process start ticks, which prevents stale status information from being associated with newly created processes reusing the same PID.
 When start ticks are unavailable, matching falls back to the process start timestamp.
-Tracking also ties retained state to that process lifetime: a replacement starts
-idle without a valid record, while a continuing process keeps its last observed
-state during a temporary gap in bridge records.
+Tracking also ties retained state and navigation ownership to that process
+lifetime. A V1 replacement starts idle without a valid record; a V2 replacement
+shows a bridge warning until valid membership is available. A continuing process
+keeps its last observed state during a temporary gap in bridge records (with a
+warning on V2).
 If a listed process temporarily cannot be inspected, tracking keeps its last
 reliable observation until inspection succeeds or the PID disappears.
 
@@ -278,9 +300,13 @@ python3 -m unittest discover -s tests -v && node --test tests/test_*.mjs
 and enablement rules. Each widget creates a policy with `create()` and calls
 `accept(jsonLine, notificationsEnabled)`, which returns `{ snapshot, decisions }`.
 Each decision contains an `eventType` (`attention` or `finished`), `sessionId`,
-and `sourcePid`. Watcher snapshots include a `tracking_id` for the process lifetime;
-notifications and focus cycling use it even when the bridge's latest hosted-session
-ID changes. Older snapshots without that field retain their existing identity
+and `sourcePid`. V2 decisions additionally carry a self-contained `focusTarget`
+with session/server identity and lifetime-checked owning TUIs; snapshots expose
+this as `focus_target`. V2 `tracking_id` is server/session scoped, whereas V1
+retains its process-lifetime identity even when the latest hosted-session ID
+changes. `completed_sessions` carries durable closed-tab completion records
+outside the counters, ensuring a slower watcher cannot miss a completion.
+Older snapshots without tracking IDs retain their existing identity
 fallbacks (PID then session ID for notifications, session ID then PID for cycling).
 Malformed JSON, invalid counts or session fields, missing identities, and
 duplicate identities throw without advancing the last accepted baseline.
@@ -288,7 +314,9 @@ duplicate identities throw without advancing the last accepted baseline.
 The tests execute the same JavaScript imported by QML. They cover policy traces,
 the desktop command builder in `NotificationDelivery.js` (generic text, bounded
 timeout, and focus target), and a composed trace through bridge-produced runtime
-records, watcher snapshots, and notification decisions. QML owns rendering and
+records, watcher snapshots, and notification decisions, including independent
+V2 tabs, deduplication, subagent exclusion, closed-tab completion, and a real
+watcher-to-TUI Unix socket navigation test. QML owns rendering and
 notification process execution.
 
 ## License

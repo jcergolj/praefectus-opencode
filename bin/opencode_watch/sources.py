@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple, Union
 
@@ -23,6 +24,11 @@ class AttentionStateReader:
             return {}
 
         records_by_pid: Dict[int, Mapping[str, Any]] = {}
+        if isinstance(status_document, dict) and status_document.get("bridge_version") == 2:
+            try:
+                return {int(status_document["source_pid"]): status_document}
+            except (KeyError, TypeError, ValueError):
+                return {}
         status_records = (
             status_document.get("sessions")
             if isinstance(status_document, dict)
@@ -46,7 +52,13 @@ class AttentionStateReader:
                 source_pid = int(status_record["source_pid"])
             except (KeyError, TypeError, ValueError):
                 continue
-            records_by_pid[source_pid] = status_record
+            previous = records_by_pid.get(source_pid)
+            if previous is None:
+                records_by_pid[source_pid] = status_record
+            else:
+                # Legacy envelopes also support multiple records per terminal.
+                records = previous.get("sessions", [previous])
+                records_by_pid[source_pid] = {"sessions": [*records, status_record]}
         return records_by_pid
 
     def read(self) -> Dict[int, Mapping[str, Any]]:
@@ -109,6 +121,22 @@ class ProcProcessSource:
             if clock_ticks is not None
             else os.sysconf(os.sysconf_names["SC_CLK_TCK"])
         )
+        self._versions = {}
+
+    def _bridge_required(self, pid: int) -> bool:
+        """Cache version by executable lifetime, not by PID or shared server."""
+        try:
+            executable = os.path.join(self.proc_root, str(pid), "exe")
+            stat = os.stat(executable)
+            key = (stat.st_dev, stat.st_ino, stat.st_mtime_ns)
+            if key not in self._versions:
+                version = subprocess.run([executable, "--version"], capture_output=True,
+                                         text=True, timeout=2, check=False)
+                self._versions[key] = not version.stdout.strip().removeprefix("opencode ").removeprefix("v").startswith("1.")
+            return self._versions[key]
+        except (OSError, subprocess.TimeoutExpired):
+            # Missing executable metadata is uncertainty, not evidence of V1.
+            return True
 
     def _comm(self, pid: int) -> Optional[str]:
         try:
@@ -181,4 +209,5 @@ class ProcProcessSource:
             directory,
             process_started_at,
             process_start_ticks,
+            self._bridge_required(pid),
         )

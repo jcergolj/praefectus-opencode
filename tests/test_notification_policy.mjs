@@ -91,6 +91,7 @@ test("malformed snapshots are rejected atomically without establishing or replac
     snapshot([session("IDLE", { tracking_id: "" })]),
     snapshot([session("IDLE", { tracking_id: null })]),
     snapshot([session("IDLE", { tracking_id: 12345 })]),
+    snapshot([session("IDLE", { focus_target: {} })]),
     snapshot([
       session("IDLE", { tracking_id: "same-lifetime" }),
       session("WAITING", { source_pid: 202, tracking_id: "same-lifetime" }),
@@ -137,5 +138,32 @@ test("policy instances and returned snapshots cannot mutate each other's transit
   assert.deepEqual(plain(other.accept(snapshot([session("IDLE")]), true).decisions), []);
   assert.deepEqual(plain(policy.accept(snapshot([session("IDLE")]), true).decisions), [
     { eventType: "finished", sessionId: "alpha", sourcePid: "101" },
+  ]);
+});
+
+test("closed completion has a silent baseline and advances while disabled without owner duplicates", () => {
+  const policy = policyModule.create();
+  const record = session("IDLE", { tracking_id: "session-A", completion_id: "101:1", focus_target: "exact-A" });
+  const frame = (records) => JSON.stringify({ ...JSON.parse(snapshot([])), completed_sessions: records });
+  assert.deepEqual(plain(policy.accept(frame([record]), true).decisions), []);
+  // A second reporter completing the same work must not notify again.
+  assert.deepEqual(plain(policy.accept(frame([{ ...record, source_pid: 102, completion_id: "102:1" }]), true).decisions), []);
+  policy.accept(snapshot([session("WORKING", { tracking_id: "session-A" })]), true);
+  assert.deepEqual(plain(policy.accept(frame([record]), false).decisions), []);
+  assert.deepEqual(plain(policy.accept(frame([record]), true).decisions), []);
+  policy.accept(snapshot([session("WORKING", { tracking_id: "session-A" })]), true);
+  assert.deepEqual(plain(policy.accept(frame([record]), true).decisions), [
+    { eventType: "finished", sessionId: "alpha", sourcePid: "101", focusTarget: "exact-A" },
+  ]);
+});
+
+test("invalid completion records cannot advance transition memory", () => {
+  const policy = policyModule.create();
+  const working = session("WORKING", { tracking_id: "session-A", focus_target: "exact-A" });
+  policy.accept(snapshot([working]), true);
+  const invalid = { ...JSON.parse(snapshot([])), completed_sessions: [{ ...working, state: "IDLE" }] };
+  assert.throws(() => policy.accept(JSON.stringify(invalid), true));
+  assert.deepEqual(plain(policy.accept(snapshot([{ ...working, state: "IDLE" }]), true).decisions), [
+    { eventType: "finished", sessionId: "alpha", sourcePid: "101", focusTarget: "exact-A" },
   ]);
 });

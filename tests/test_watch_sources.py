@@ -115,10 +115,7 @@ class ProcessSourceTests(unittest.TestCase):
             )
 
             self.assertEqual(source.opencode_pids(), {101})
-            self.assertEqual(
-                source.inspect(101),
-                watch.ProcessInfo(101, str(project), 1002.0, 200),
-            )
+            self.assertEqual(source.inspect(101), watch.ProcessInfo(101, str(project), 1002.0, 200, True))
             self.assertEqual(source.ancestors(101), [101])
 
             (process_dir / "stat").write_text("malformed")
@@ -134,8 +131,10 @@ class ProcessSourceTests(unittest.TestCase):
             stat = process_dir / "stat"
             self.write_stat(stat, 1, 200)
             records = {101: {"state": "WORKING", "process_start_ticks": 200}}
+            source = watch.ProcProcessSource(proc_root, lambda: 1000, 100)
+            source._bridge_required = lambda pid: False  # This fixture models V1.
             snapshots = watch.SnapshotService(watch.SessionCollector(
-                watch.ProcProcessSource(proc_root, lambda: 1000, 100),
+                source,
                 FakeAttentionSource(records), FakeTerminal(),
             ))
             original = snapshots.snapshot()["sessions"][0]

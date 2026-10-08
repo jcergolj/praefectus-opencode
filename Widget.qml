@@ -162,10 +162,10 @@ Panel {
   function focusSession(sessionId, sourcePid) {
     if (!sessionId && (sourcePid === undefined || sourcePid === null || String(sourcePid) === "")) return
     var selectedSession = sessionId
-      ? sessions.find(function(item) { return item.session_id === sessionId })
+      ? sessions.find(function(item) { return item.tracking_id === sessionId || item.session_id === sessionId })
       : null
     var focusTarget = selectedSession
-      ? selectedSession.source_pid
+      ? (selectedSession.focus_target || selectedSession.source_pid)
       : (sourcePid !== undefined && sourcePid !== null && String(sourcePid) !== "" ? sourcePid : sessionId)
     Quickshell.execDetached([root.watcherPath, "--focus", String(focusTarget)])
     root.close()
@@ -177,7 +177,7 @@ Panel {
   }
 
   function activateCursor() {
-    if (visibleSessions.length > 0) focusSession(visibleSessions[selectedSessionIndex].session_id)
+    if (visibleSessions.length > 0) focusSession(visibleSessions[selectedSessionIndex].tracking_id)
   }
 
   function toggleExpanded(sessionId) {
@@ -217,12 +217,13 @@ Panel {
   function parseState(inputText) {
     try {
       var result = notificationPolicy.accept(String(inputText || ""), notificationsEnabled)
+      // Deliver closed-tab completion before replacing the counted entries.
+      for (var index = 0; index < result.decisions.length; index++)
+        sendNotification(result.decisions[index])
       liveSnapshot = result.snapshot
       currentTimeMs = Date.now()
       if (selectedSessionIndex >= visibleSessions.length)
         selectedSessionIndex = Math.max(0, visibleSessions.length - 1)
-      for (var index = 0; index < result.decisions.length; index++)
-        sendNotification(result.decisions[index])
     } catch (parseError) {
       console.warn("praefectus-opencode", "bad state line", parseError)
     }
@@ -355,6 +356,19 @@ Panel {
       displayValue: String(root.countFor("idle"))
     }
 
+    WidgetButton {
+      visible: (root.snapshot.warnings || []).length > 0
+      bar: root.bar
+      text: "!"
+      fontSize: Style.font.bodySmall
+      foreground: root.statusColor("NEEDS_APPROVAL")
+      horizontalMargin: 0
+      verticalPadding: 0
+      implicitHeight: root.bar ? root.bar.barSize : Style.bar.sizeHorizontal
+      tooltipText: (root.snapshot.warnings || []).join("\n")
+      onPressed: function(button) { if (button === Qt.LeftButton) root.openAll() }
+    }
+
   }
 
   IpcHandler {
@@ -422,13 +436,26 @@ Panel {
 
           Rectangle { width: parent.width; height: 1; color: root.dim }
 
+          Text {
+            visible: (root.snapshot.warnings || []).length > 0
+            width: parent.width
+            text: (root.snapshot.warnings || []).join("\n")
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            color: root.statusColor("NEEDS_APPROVAL")
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            topPadding: Style.space(8)
+            bottomPadding: Style.space(8)
+          }
+
           Repeater {
             model: root.visibleSessions
 
             delegate: Item {
               required property var modelData
               required property int index
-              readonly property bool expanded: root.expandedSessionId === modelData.session_id
+              readonly property bool expanded: root.expandedSessionId === modelData.tracking_id
               readonly property bool selected: index === root.selectedSessionIndex
               width: panelColumn.width
               height: expanded ? Style.space(120) : Style.space(60)
@@ -539,7 +566,7 @@ Panel {
                 anchors.fill: parent
                 anchors.rightMargin: Style.space(26)
                 acceptedButtons: Qt.LeftButton
-                onClicked: root.focusSession(modelData.session_id)
+                onClicked: root.focusSession(modelData.tracking_id)
               }
 
               MouseArea {
@@ -548,7 +575,7 @@ Panel {
                 anchors.bottom: parent.bottom
                 width: Style.space(30)
                 acceptedButtons: Qt.LeftButton
-                onClicked: root.toggleExpanded(modelData.session_id)
+                onClicked: root.toggleExpanded(modelData.tracking_id)
               }
             }
           }

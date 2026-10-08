@@ -24,6 +24,8 @@ def snapshot_signature(snapshot: Mapping[str, Any]) -> str:
         {
             "counts": snapshot.get("counts", {}),
             "sessions": snapshot.get("sessions", []),
+            "completed_sessions": snapshot.get("completed_sessions", []),
+            "warnings": snapshot.get("warnings", []),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -122,7 +124,7 @@ class SessionSelector:
         )
         if selected_session is None:
             return None
-        return selected_session.get("source_pid") or selected_session.get("session_id")
+        return selected_session.get("focus_target") or selected_session.get("source_pid") or selected_session.get("session_id")
 
 
 def focus_candidates_for_bucket(
@@ -262,7 +264,7 @@ class FocusCycleStore:
                 pass
             return False
 
-        session_target = selected_session.get("source_pid") or selected_session.get(
+        session_target = selected_session.get("focus_target") or selected_session.get("source_pid") or selected_session.get(
             "session_id"
         )
         if session_target is None:

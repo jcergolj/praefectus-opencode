@@ -1,5 +1,7 @@
-/* V2 terminal adapter. Read only public CLI data, never server storage. */
-import { createStatusReporter } from "./index.js";
+/* V2 membership belongs to local tabs; status belongs to each root session. */
+import { createHash } from "node:crypto";
+import { createStatusReporter, ProcessStatus, StatusRecordBuilder } from "./index.js";
+import { NavigationChannel } from "./navigation.js";
 
 export class TerminalStatusBridge {
   constructor(context, reporter = createStatusReporter({
@@ -7,118 +9,146 @@ export class TerminalStatusBridge {
   })) {
     this.context = context;
     this.reporter = reporter;
-    this.synced = new Set();
+    this.sessions = new Map();
+    this.completed = new Map();
+    this.known = new Set();
+    this.serverID = null;
     this.disposed = false;
     this.refreshing = null;
+    this.channel = null;
+    this.navigationWarning = null;
+    this.sequence = 0;
   }
 
   sessionIDs() {
     const { data, ui } = this.context;
     const route = ui.router.current();
-    const roots = new Set(ui.tabs.enabled() ? ui.tabs.list().map((tab) => tab.sessionID) : []);
-    if (route.type === "session") roots.add(data.session.root(route.sessionID));
-    return new Set([...roots].flatMap((id) => [id, ...data.session.family(id)]));
+    const ids = ui.tabs.enabled() ? ui.tabs.list().map((tab) => tab.sessionID)
+      : (route.type === "session" ? [data.session.root(route.sessionID)] : []);
+    return new Set(ids.filter(Boolean).map((id) => data.session.root(id)));
+  }
+
+  async startNavigation() {
+    this.channel = new NavigationChannel((command) => this.navigate(command));
+    await this.channel.start();
+  }
+
+  navigate(command) {
+    if (this.disposed || command.server_id !== this.serverID ||
+        !this.known.has(command.session_id)) return false;
+    const { ui } = this.context;
+    if (ui.tabs.enabled()) ui.tabs.focus(command.session_id);
+    else ui.router.navigate({ type: "session", sessionID: command.session_id });
+    return true;
   }
 
   refresh() {
     if (this.disposed) return Promise.resolve();
     if (!this.refreshing) {
       this.refreshing = this.update().catch(() => {
-        // A disconnected server or missing metadata must not break the TUI.
+        // Disconnections cannot replace reliable status with invented idle data.
       }).finally(() => { this.refreshing = null; });
     }
     return this.refreshing;
   }
 
   async update() {
-    const { data } = this.context;
+    const { data, client } = this.context;
+    if (!this.serverID) {
+      const info = await client.server.info();
+      this.serverID = createHash("sha256").update(JSON.stringify({
+        urls: [...info.urls].sort(), pid: info.pid, tmp: info.paths.tmp,
+      })).digest("hex");
+    }
     const ids = this.sessionIDs();
-    const added = [...ids].filter((id) => !this.synced.has(id));
-    await Promise.all(added.map(async (id) => {
+    for (const id of ids) {
+      if (this.sessions.has(id)) continue;
       await data.session.sync(id);
-      const location = data.session.get(id)?.location;
+      const session = data.session.get(id);
+      if (!session || session.parentID) continue;
       await Promise.all([
-        data.session.permission.sync(id),
-        data.session.form.sync(id, location),
-        data.session.message.sync(id),
-        // Context metadata is optional; catalogue failures cannot hide status.
-        data.location.model.sync(location).catch(() => {}),
+        data.session.permission.sync(id), data.session.form.sync(id, session.location),
+        data.session.message.sync(id), data.location.model.sync(session.location).catch(() => {}),
       ]);
-      this.synced.add(id);
-    }));
+      if (this.disposed) return;
+      const builder = new StatusRecordBuilder({ ...this.reporter.recordBuilder,
+        directory: session.location.directory });
+      this.sessions.set(id, { status: new ProcessStatus(), builder, record: null });
+      this.known.add(id);
+    }
     if (this.disposed) return;
-
-    // Route/tab changes do not emit server events. Re-read membership after
-    // async syncs so an old tab can never leak into a different terminal.
-    const currentIDs = this.sessionIDs();
-    const status = this.reporter.processStatus;
-    const previous = status.decision;
-    for (const id of this.synced) {
-      if (!currentIDs.has(id)) this.synced.delete(id);
-    }
-    for (const id of status.workingSessions) {
-      if (!currentIDs.has(id)) status.workingSessions.delete(id);
-    }
-    for (const id of status.pendingRequests.keys()) {
-      if (!currentIDs.has(id)) status.pendingRequests.delete(id);
-    }
-    if (!currentIDs.has(status.lastSessionId)) status.lastSessionId = null;
-
-    // Aggregate all changes before publishing: answering a permission must
-    // not briefly look idle while its session is still running.
-    for (const id of currentIDs) {
-      if (!this.synced.has(id)) continue;
+    // Re-read tabs after asynchronous cache synchronization.
+    const open = this.sessionIDs();
+    for (const [id, entry] of this.sessions) {
+      const wasActive = entry.record && entry.record.state !== "IDLE";
+      const newlyActive = !entry.record && (data.session.status(id) === "running" ||
+        (data.session.permission.list(id) ?? []).some((p) => !p.sessionID || p.sessionID === id) ||
+        (data.session.form.list(id, data.session.get(id)?.location) ?? []).some((f) => !f.sessionID || f.sessionID === id));
+      if (!open.has(id) && !wasActive && !newlyActive) {
+        this.sessions.delete(id);
+        continue;
+      }
+      const { status, builder } = entry;
+      const previous = status.decision;
+      const activity = data.session.status(id);
+      if (activity !== "running" && activity !== "idle") continue;
       status.accept({ type: "session.status", properties: {
-        sessionID: id, status: data.session.status(id) === "running" ? "busy" : "idle",
+        sessionID: id, status: activity === "running" ? "busy" : "idle",
       } });
-      const requests = [];
       const permissions = data.session.permission.list(id);
       const forms = data.session.form.list(id, data.session.get(id)?.location);
-      for (const permission of permissions ?? []) {
-        requests.push({ type: "permission.asked", properties: {
-          ...permission, sessionID: id, permission: permission.action, patterns: permission.resources,
-        } });
-      }
-      for (const form of forms ?? []) {
-        requests.push({ type: "question.asked", properties: {
-          id: form.id, sessionID: id, question: form.title,
-        } });
-      }
-      const keys = new Set(requests.map((request) =>
-        `${request.type === "permission.asked" ? "permission" : "question"}:${request.properties.id}`));
+      const requests = [
+        ...(permissions ?? []).filter((p) => !p.sessionID || p.sessionID === id).map((p) => ({ type: "permission.asked", properties: {
+          ...p, sessionID: id, permission: p.action, patterns: p.resources,
+        } })),
+        ...(forms ?? []).filter((f) => !f.sessionID || f.sessionID === id).map((f) => ({ type: "question.asked", properties: {
+          id: f.id, sessionID: id, question: f.title,
+        } })),
+      ];
+      const keys = new Set(requests.map((r) =>
+        `${r.type === "permission.asked" ? "permission" : "question"}:${r.properties.id}`));
       const pending = status.pendingRequests.get(id);
       for (const key of pending?.keys() ?? []) {
-        const available = key.startsWith("permission:") ? permissions : forms;
-        if (available !== undefined && !keys.has(key)) pending.delete(key);
+        if ((key.startsWith("permission:") ? permissions : forms) !== undefined && !keys.has(key)) pending.delete(key);
       }
       if (pending?.size === 0) status.pendingRequests.delete(id);
       for (const request of requests) status.accept(request);
+      status.decision = status.aggregate();
+      if (previous.state !== status.decision.state) builder.markTransition();
+      const session = data.session.get(id);
+      const messages = data.session.message.list(id) ?? [];
+      const assistant = [...messages].reverse().find((m) => m.type === "assistant" && m.tokens);
+      const model = (data.location.model.list(session?.location) ?? []).find((m) =>
+        m.providerID === assistant?.model?.providerID && m.id === assistant?.model?.id);
+      builder.updateContextUsage(assistant, model?.limit?.context);
+      entry.record = { ...builder.build(status.decision, { type: "cli.snapshot" }),
+        server_id: this.serverID, tab_open: open.has(id),
+        session_created_at: session?.time?.created ?? builder.processStartedAt,
+        navigation_socket: this.channel?.path ?? null };
+      if (open.has(id)) this.completed.delete(id);
+      else if (entry.record.state === "IDLE") {
+        // Durable until reopened/exit: a slower watcher cannot miss completion.
+        this.completed.set(id, { ...entry.record,
+          completion_id: `${this.reporter.recordBuilder.processId}:${++this.sequence}` });
+        this.sessions.delete(id);
+      }
     }
-    const route = this.context.ui.router.current();
-    status.lastSessionId = route.type === "session" && currentIDs.has(route.sessionID)
-      ? route.sessionID : (currentIDs.values().next().value ?? null);
-    status.decision = status.aggregate();
-    const decision = status.decision;
-    if (previous.state !== decision.state) this.reporter.recordBuilder.markTransition();
-
-    // The V2 message/model shapes differ from V1's provider catalogue. Use
-    // the model catalogue for the session's actual location and model.
-    const session = decision.sessionId ? data.session.get(decision.sessionId) : null;
-    const messages = decision.sessionId ? data.session.message.list(decision.sessionId) : [];
-    const assistant = [...messages].reverse().find((message) => message.type === "assistant" && message.tokens);
-    const models = data.location.model.list(session?.location) ?? [];
-    const model = assistant && models.find((candidate) =>
-      candidate.providerID === assistant.model?.providerID && candidate.id === assistant.model?.id);
-    const contextChanged = this.reporter.recordBuilder.updateContextUsage(assistant, model?.limit?.context);
-    if (!this.reporter.hasWrittenRecord || contextChanged || JSON.stringify(previous) !== JSON.stringify(decision)) {
-      this.reporter.recordWriter.write(this.reporter.recordBuilder.build(decision, { type: "cli.snapshot" }));
-      this.reporter.hasWrittenRecord = true;
-    }
+    const owner = this.reporter.recordBuilder.build(this.reporter.processStatus.decision, null);
+    this.reporter.recordWriter.write({ ...owner, bridge_version: 2, server_id: this.serverID,
+      sessions: [...this.sessions.values()].map((entry) => entry.record).filter(Boolean),
+      completed_sessions: [...this.completed.values()],
+      warnings: [
+        ...[...this.sessions].filter(([, entry]) => !entry.record)
+          .map(([id]) => `Session ${id}: awaiting status bridge data`),
+        ...(this.navigationWarning ? [this.navigationWarning] : []),
+      ],
+    });
   }
 
   async dispose() {
     this.disposed = true;
     await this.refreshing;
+    await this.channel?.dispose();
     await this.reporter.dispose();
   }
 }
@@ -127,13 +157,13 @@ export default {
   id: "praefectus-opencode",
   async setup(context) {
     const bridge = new TerminalStatusBridge(context);
+    try { await bridge.startNavigation(); } catch {
+      await bridge.channel?.dispose();
+      bridge.channel = null;
+      bridge.navigationWarning = "exact-session navigation unavailable (could not create local command socket)";
+    }
     await bridge.refresh();
-    // Public CLI caches are updated by OpenCode's event stream. Polling also
-    // catches local tab/route changes without subscribing to private UI state.
     const timer = setInterval(() => void bridge.refresh(), 500);
-    return async () => {
-      clearInterval(timer);
-      await bridge.dispose();
-    };
+    return async () => { clearInterval(timer); await bridge.dispose(); };
   },
 };

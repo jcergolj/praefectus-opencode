@@ -2,10 +2,30 @@
 
 import json
 import shutil
+import socket
 import subprocess
 from typing import Any, Callable, Iterable, List, Optional, Sequence
 
 from .domain import FocusTarget, ProcessSource, TmuxPane
+from .tracking import SessionTracker
+
+
+def navigate_session(owner, server_id, session_id):
+    """Require an acknowledgement from the TUI before reporting success."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
+            channel.settimeout(2)
+            channel.connect(owner["navigation_socket"])
+            channel.sendall((json.dumps({"server_id": server_id, "session_id": session_id}) + "\n").encode())
+            response = b""
+            while b"\n" not in response and len(response) <= 8192:
+                chunk = channel.recv(8192)
+                if not chunk:
+                    return False
+                response += chunk
+            return json.loads(response.split(b"\n")[0]).get("ok") is True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
 
 
 def command_succeeded(command_result: Any) -> bool:
@@ -178,11 +198,30 @@ def parse_pid(target: Any) -> Optional[int]:
 class FocusService:
     """Try the available desktop focus targets in their configured order."""
 
-    def __init__(self, process_source: ProcessSource, targets: Sequence[FocusTarget]):
+    def __init__(self, process_source: ProcessSource, targets: Sequence[FocusTarget], navigate=navigate_session):
         self.process_source = process_source
         self.targets = targets
+        self.navigate = navigate
 
     def focus(self, target: Any) -> bool:
+        if isinstance(target, str) and target.startswith("session:"):
+            try:
+                command = json.loads(target.removeprefix("session:"))
+                if not command["server_id"] or not command["session_id"]:
+                    return False
+                for owner in command["owners"]:
+                    pid = owner["source_pid"]
+                    process = self.process_source.inspect(pid)
+                    if process is None or not SessionTracker._matches_process(process, owner):
+                        continue
+                    if not owner.get("navigation_socket"):
+                        continue
+                    if self.navigate(owner, command["server_id"], command["session_id"]):
+                        if any(t.focus(self.process_source.ancestors(pid)) for t in self.targets):
+                            return True
+                return False
+            except (ValueError, TypeError, KeyError):
+                return False
         process_pid = parse_pid(target)
         if process_pid is None:
             return False

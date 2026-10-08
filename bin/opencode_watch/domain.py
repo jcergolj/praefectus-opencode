@@ -50,6 +50,7 @@ class ProcessInfo:
     directory: str
     started_at: float
     start_ticks: Optional[int] = None
+    bridge_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,9 +77,10 @@ class Session:
     context_tokens: Any = None
     context_limit: Any = None
     context_percentage: Any = None
+    focus_target: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
-        return {
+        record = {
             "session_id": self.session_id,
             "tracking_id": self.tracking_id,
             "project": self.project,
@@ -96,6 +98,9 @@ class Session:
             "context_limit": self.context_limit,
             "context_percentage": self.context_percentage,
         }
+        if self.focus_target is not None:
+            record["focus_target"] = self.focus_target
+        return record
 
 
 class SessionStatus(str, Enum):
