@@ -2,7 +2,7 @@
 
 Keep track of all your OpenCode sessions directly from the Omarchy bar.
 
-Praefectus shows which agents are **working**, **waiting for your response**, **waiting for permission**, or **idle** — and lets you jump straight to the relevant terminal or tmux pane.
+Praefectus shows which OpenCode sessions are **working**, **waiting for your response**, **waiting for permission**, or **idle** — and lets you jump straight to the relevant session, terminal, or tmux pane.
 
 ![Praefectus OpenCode example](images/example.png)
 
@@ -37,46 +37,54 @@ session closes; numbering resets once all sessions in that directory close.
 
 ## Features
 
-* Live status of all top-level OpenCode sessions
+* Live status of local full-screen OpenCode V2 sessions
 * Working, response, permission and idle states
 * Clickable session lists
-* Jump directly to the terminal or tmux pane running a session
-* Cycle between sessions using keyboard shortcuts
-* Desktop notifications when an agent needs attention or finishes
+* Select the exact V2 session when focusing its terminal or tmux pane
+* Cycle between individual sessions, including tabs in the same terminal
+* Independent attention and completion notifications for each V2 session
+* Keep closed working or attention tabs visible until completion
+* Count the same V2 session once when open in multiple terminals
 * Context-window usage when OpenCode exposes token metadata
 * Optional colored counters
-* Ignores nested OpenCode processes created by subagents
+* No V2 subagent tracking; nested OpenCode processes are also excluded
+* OpenCode V1 process-based tracking remains supported
 * Does not scrape terminal output or read OpenCode's private storage
 
 ## Installation
 
 ### OpenCode version compatibility
 
-**Praefectus release numbers are not OpenCode version numbers.** In particular,
-Praefectus `v2` is an OpenCode **V1** release, not an OpenCode V2 bridge.
+**Praefectus release numbers are not OpenCode version numbers.**
 
-| Praefectus release / revision | Commit | OpenCode compatibility |
+| OpenCode version | Latest recommended tag | Tracking |
 | --- | --- | --- |
-| [v1](https://github.com/jcergolj/praefectus-opencode/releases/tag/v1) | [`845262e`](https://github.com/jcergolj/praefectus-opencode/commit/845262e) | V1 only |
-| [v2](https://github.com/jcergolj/praefectus-opencode/releases/tag/v2) | [`b66db00`](https://github.com/jcergolj/praefectus-opencode/commit/b66db00) | V1 only |
-| [v3](https://github.com/jcergolj/praefectus-opencode/releases/tag/v3) | [`385084f`](https://github.com/jcergolj/praefectus-opencode/commit/385084f) | V1 only |
-| [v4](https://github.com/jcergolj/praefectus-opencode/releases/tag/v4) — last V1-only release | [`e1660c6`](https://github.com/jcergolj/praefectus-opencode/commit/e1660c6) | V1 only |
-| Dual-version compatibility update — **unreleased** | [`4c47776`](https://github.com/jcergolj/praefectus-opencode/commit/4c47776) | V1 **1.18.29+** and V2 full-screen TUI (smoke-tested on **2.0.24**) |
+| V1 — legacy V1-only build | [v5](https://github.com/jcergolj/praefectus-opencode/releases/tag/v5) | One entry per terminal process |
+| V2 — full-screen TUI | [v6](https://github.com/jcergolj/praefectus-opencode/releases/tag/v6) | One entry per unique top-level session; exact-session navigation |
+
+**v6 also supports OpenCode V1 1.18.29+.** You do not need separate builds when
+using both OpenCode versions. V2's original terminal bridge was smoke-tested on
+OpenCode **2.0.24**; individual-session tracking has automated regression coverage.
+
+**Compatibility note:** `v5` originally advertised V2 support, but contains
+V1-only code. Its release notes have been corrected without changing the tag.
+Use **v6** for V2 support.
 
 The same bundled source supports both versions; you do not need separate
 Praefectus builds. OpenCode selects the V1 server adapter or V2 terminal adapter.
-The status-file format, watcher, focus commands, and notification policy are
-shared. Installation differs because V2 runs a shared background server and
+The watcher, focus commands, and notification policy support both record formats.
+Installation differs because V2 runs a shared background server and
 uses a separate terminal plugin API. Older V1 versions are not supported by
 the current object entrypoint.
 
-For OpenCode V2, use a checkout containing `plugin/tui.js` and
-`plugin/package.json`; **none of the existing `v1`–`v4` tags includes it**.
-V2 support starts at commit `4c47776`; use that commit or a descendant.
-For a pinned V1-only checkout, use `git checkout v4` (or the exact commit
-`e1660c656aa7b3f8fcf9f7ce4a451f78a1c6c608`) in a clean clone.
+For a pinned checkout, select `v5` for the legacy V1-only build or `v6` for V2
+support in a clean clone. The installation commands below use the current build;
+the V2 bridge is not available in `v5`.
 
 ### Omarchy widget
+
+Requires Omarchy with Hyprland and Python 3. tmux is optional; when present,
+Praefectus can focus the pane hosting a session.
 
 Install the Omarchy plugin:
 
@@ -152,6 +160,23 @@ When upgrading from OpenCode V1 to V2, add the V2 `cli.json` entry above.
 The old file symlink alone does **not** load the V2 terminal adapter; you can
 remove it with the command below. Both integrations remain opt-in.
 
+## Updating
+
+Update the installed widget and bundled bridge:
+
+```bash
+omarchy plugin update praefectus.opencode
+```
+
+The widget reloads after an update. **Restart each running OpenCode TUI** to load
+the updated bridge; you do not need to restart the V2 background service. Existing
+`cli.json` entries or V1 symlinks can stay unchanged when the installation path
+has not changed.
+
+If you customized the installed plugin, preserve those changes before updating;
+the updater requires a fast-forwardable Git checkout. Avoid deleting the plugin
+or resetting local edits just to update it.
+
 ## Uninstall
 
 For the V2 bridge, remove only the Praefectus entry from `cli.json`'s `plugins`
@@ -180,25 +205,33 @@ user actions.
 
 Praefectus can focus sessions directly from Hyprland.
 
-Add these bindings to `~/.config/hypr/bindings.lua`:
+These shortcuts are optional, not installed automatically. Check existing
+bindings with `omarchy menu keybindings --print` before adding them. If a key is
+already assigned, choose another key or explicitly remove the old binding with
+`hl.unbind("SUPER + ALT + W")` (using the key you intend to replace).
 
-```ini
-bind = SUPER ALT, W, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state working
-bind = SUPER ALT, R, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state response
-bind = SUPER ALT, P, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state permission
-bind = SUPER ALT, I, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-state idle
+Add the following **Lua** to `~/.config/hypr/bindings.lua`:
 
-bind = SUPER ALT, TAB, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-next
-bind = SUPER ALT SHIFT, TAB, exec, ~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --focus-previous
+```lua
+local watcher = os.getenv("HOME") .. "/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch"
+
+o.bind("SUPER + ALT + W", "OpenCode: working session", watcher .. " --focus-state working")
+o.bind("SUPER + ALT + R", "OpenCode: response needed", watcher .. " --focus-state response")
+o.bind("SUPER + ALT + P", "OpenCode: permission needed", watcher .. " --focus-state permission")
+o.bind("SUPER + ALT + I", "OpenCode: idle session", watcher .. " --focus-state idle")
+
+o.bind("SUPER + ALT + TAB", "OpenCode: next session", watcher .. " --focus-next")
+o.bind("SUPER + ALT + SHIFT + TAB", "OpenCode: previous session", watcher .. " --focus-previous")
 ```
 
-Then reload Hyprland:
+Reload Hyprland and check for configuration errors:
 
 ```bash
 hyprctl reload
+hyprctl configerrors
 ```
 
-### Default shortcuts
+### Suggested shortcuts
 
 | Shortcut                    | Action                                 |
 | --------------------------- | -------------------------------------- |
@@ -210,6 +243,11 @@ hyprctl reload
 | `SUPER + ALT + SHIFT + TAB` | Focus the previous session             |
 
 Repeated presses cycle through matching sessions and wrap around.
+On V2, cycling can select different sessions in the same terminal. On V1,
+it cycles between tracked terminal processes.
+
+Inside the session panel, use the arrow keys to move, Enter to focus, Escape to
+close, and `r` to clear the filter. Click a row's arrow to expand its preview.
 
 ## Notifications
 
@@ -242,8 +280,38 @@ until that session becomes idle, even if no separate busy event arrives.
 Rejecting another request does not finish that resumed work.
 
 Clicking a notification focuses the corresponding session.
+On V2, it also selects or reopens the exact session. On V1, it focuses the
+corresponding terminal or tmux pane.
 
 The notification timeout can be configured between 8 and 30 seconds from the widget settings.
+
+## Troubleshooting
+
+### The bar shows `!` or no V2 sessions
+
+Click `!` to read the warning in the session panel. Check that:
+
+1. The installed revision includes the V2 bridge (see the compatibility table).
+2. `cli.json` points to the absolute **plugin directory**, not `plugin/index.js`.
+3. You restarted the OpenCode TUI after installing or updating the bridge.
+4. You have a session open in a full-screen TUI. An empty terminal counts as zero;
+   Mini, headless commands, and browser/desktop sessions are not tracked.
+
+Inspect the watcher's current snapshot without changing anything:
+
+```bash
+~/.config/omarchy/plugins/praefectus.opencode/bin/opencode-watch --once
+```
+
+The `warnings` field identifies missing, invalid, or stale bridge data. If the
+widget itself has not reloaded after an update, run `omarchy restart shell`.
+
+### A click cannot reopen a session
+
+Exact-session navigation requires an owning V2 TUI to remain running and its
+local command socket to be available. Once all owning terminals exit, old
+notifications cannot reopen the session; open it from OpenCode's session history.
+Praefectus will not reuse a stale PID to focus an unrelated replacement process.
 
 ## How It Works
 
@@ -254,7 +322,9 @@ The bundled bridge publishes lightweight runtime status information: V1
 uses process-wide server event hooks, while V2 publishes independent session
 records in a per-terminal envelope using public data from the local TUI. V2 never
 associates the shared server's PID with a terminal. Status files are stored under
-`$XDG_RUNTIME_DIR`, falling back to `~/.cache` when necessary.
+`$XDG_RUNTIME_DIR/praefectus-opencode/`, falling back to
+`~/.cache/praefectus-opencode/` when necessary. V2 navigation sockets live in the
+same user-private directory.
 
 Praefectus does **not** scrape terminal output and does **not** access OpenCode's private storage.
 
@@ -277,6 +347,8 @@ OpenCode agents are today's technical workers.
 Praefectus keeps an eye on them and tells you which one needs your attention.
 
 ## Tests
+
+The test suite requires Python 3 and Node.js; no running desktop is needed.
 
 Run the watcher tests:
 
