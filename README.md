@@ -11,6 +11,7 @@
 **Total : working | response needed | permission needed | idle**
 
 - **One entry per V2 session**, even with several tabs in one terminal.
+- **Fresh welcome screens count as idle immediately**, before the first prompt creates a session.
 - **No duplicate counting** when a session is open in multiple terminals. Subagents are excluded.
 - **Closed working tabs stay visible** until completion, including while awaiting attention.
 - **Clickable notifications** for attention and completion. Startup is silent; settings control enablement, colors, and notification timeout (8–30 seconds).
@@ -24,7 +25,7 @@
 
 **v6 also supports V1 1.18.29+.** Praefectus tag numbers are not OpenCode version numbers; **v5 is V1-only**.
 
-V2 supports local TUIs, `--standalone`, and remote-server connections. **Not supported:** Mini, headless `opencode run`, browser/desktop sessions, or saved history. Open idle tabs count; empty terminals do not. With tabs disabled, the displayed top-level session is tracked.
+V2 supports local TUIs, `--standalone`, and remote-server connections. **Not supported:** Mini, headless `opencode run`, browser/desktop sessions, or saved history. Open idle tabs and the displayed welcome screen count. A welcome-screen entry is replaced by the real session after the first prompt, without double-counting. With tabs disabled, the displayed top-level session or welcome screen is tracked.
 
 ## Install
 
@@ -119,7 +120,7 @@ omarchy plugin update praefectus.opencode
 | Symptom | Check |
 | --- | --- |
 | **`!` in the bar** | Click it for the warning. Check the bridge path and restart OpenCode. |
-| **No V2 sessions** | Use v6+, a full-screen TUI, and an open session. |
+| **No V2 sessions** | Use v6+, a full-screen TUI, and the configured V2 bridge. |
 | **A click cannot reopen a session** | An owning TUI must still be running. Otherwise, use OpenCode's history. |
 | **Widget hasn't refreshed** | Run `omarchy restart shell`. |
 

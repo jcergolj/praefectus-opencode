@@ -36,7 +36,7 @@ function fixture(pid = 101, server = "shared") {
       location: { model: { sync: async () => {}, list: (location) => location?.directory === "/work/a" ? [model] : [] } },
     },
     ui: {
-      router: { current: () => route, navigate: (value) => { navigation.push(value.sessionID); route = value; } },
+      router: { current: () => route, navigate: (value) => { navigation.push(value.type === "home" ? "home" : value.sessionID); route = value; } },
       tabs: { enabled: () => tabsEnabled, list: () => tabs.map((sessionID) => ({ sessionID })),
         focus: (id) => { navigation.push(id); if (!tabs.includes(id)) tabs.push(id); route = { type: "session", sessionID: id }; } },
     },
@@ -89,6 +89,71 @@ test("V2 publishes independent top-level tabs including restored attention and i
   assert.deepEqual(f.syncs, ["A", "B"]);
 });
 
+test("a fresh welcome screen counts as idle before its first prompt", async () => {
+  const existing = fixture(), fresh = fixture(102);
+  existing.states.set("A", "running");
+  fresh.setTabs([]); fresh.setRoute({ type: "home" });
+  await existing.adapter.refresh(); await fresh.adapter.refresh();
+  const frames = [[structuredClone(existing.latest()), structuredClone(fresh.latest())]];
+  const watcher = spawnSync("python3", [fileURLToPath(new URL("./notification_trace_snapshots.py", import.meta.url))], {
+    input: JSON.stringify(frames), encoding: "utf8",
+  });
+  assert.equal(watcher.status, 0, watcher.stderr);
+  const snapshot = JSON.parse(watcher.stdout)[0];
+  assert.equal(snapshot.counts.sessions, 2, "working conversation plus fresh idle terminal");
+  assert.equal(snapshot.counts.idle, 1);
+  assert.deepEqual(fresh.syncs, [], "no saved conversation is synced for a welcome screen");
+  const placeholder = fresh.latest().sessions[0];
+  assert.equal(placeholder.state, "IDLE");
+  const policy = (await loadQmlScript("../NotificationPolicy.js")).create();
+  assert.deepEqual(plain(policy.accept(JSON.stringify(snapshot), true).decisions), []);
+  fresh.setTabs(["B"]); fresh.setRoute({ type: "session", sessionID: "B" });
+  fresh.states.set("B", "running");
+  await fresh.adapter.refresh();
+  assert.deepEqual(fresh.latest().sessions.map((r) => r.session_id), ["B"]);
+  assert.deepEqual(fresh.latest().completed_sessions, [], "replacing a welcome screen is not completion");
+  const after = spawnSync("python3", [fileURLToPath(new URL("./notification_trace_snapshots.py", import.meta.url))], {
+    input: JSON.stringify([[existing.latest(), fresh.latest()]]), encoding: "utf8",
+  });
+  assert.equal(after.status, 0, after.stderr);
+  const afterSnapshot = JSON.parse(after.stdout)[0];
+  assert.equal(afterSnapshot.counts.sessions, 2);
+  assert.equal(afterSnapshot.counts.working, 2);
+  assert.deepEqual(plain(policy.accept(JSON.stringify(afterSnapshot), true).decisions), []);
+});
+
+test("welcome entries are process-specific, stable, and navigate without a server session", async () => {
+  const first = fixture(), second = fixture(102);
+  first.setTabs([]); first.setRoute({ type: "home" });
+  second.disableTabs(); second.setRoute({ type: "home" });
+  await first.adapter.refresh(); await second.adapter.refresh();
+  const home = first.latest().sessions[0];
+  assert.notEqual(home.session_id, second.latest().sessions[0].session_id);
+  await first.adapter.refresh();
+  assert.equal(first.latest().sessions[0].session_id, home.session_id);
+  assert.equal(first.latest().sessions[0].last_transition_ts, home.last_transition_ts);
+  assert.equal(first.adapter.navigate({ server_id: "wrong", session_id: home.session_id }), false);
+  assert.equal(first.adapter.navigate({ server_id: first.adapter.serverID, session_id: home.session_id }), true);
+  assert.deepEqual(first.navigation, ["home"]);
+  first.setRoute({ type: "plugin", name: "dashboard" });
+  await first.adapter.refresh();
+  assert.deepEqual(first.latest().sessions, [], "only an actual welcome screen gets a placeholder");
+  assert.deepEqual(first.latest().completed_sessions, []);
+  assert.equal(first.adapter.navigate({ server_id: first.adapter.serverID, session_id: home.session_id }), false);
+});
+
+test("a welcome screen counts alongside existing tabs but is not retained after navigation", async () => {
+  const f = fixture();
+  f.setRoute({ type: "home" });
+  await f.adapter.refresh();
+  assert.equal(f.latest().sessions.length, 2);
+  assert.equal(f.session("A").state, "IDLE");
+  f.setRoute({ type: "session", sessionID: "A" });
+  await f.adapter.refresh();
+  assert.deepEqual(f.latest().sessions.map((r) => r.session_id), ["A"]);
+  assert.deepEqual(f.latest().completed_sessions, []);
+});
+
 test("subagent activity, attention, and completion have no effect on parent records", async () => {
   const f = fixture();
   await f.adapter.refresh();
@@ -120,7 +185,7 @@ test("unrelated history is excluded and tabs-disabled membership follows the dis
   assert.equal(f.session("B").tab_open, false, "closed running session is retained");
   f.states.delete("B");
   await f.adapter.refresh();
-  assert.deepEqual(f.latest().sessions, []);
+  assert.deepEqual(f.latest().sessions.map((r) => [r.session_id, r.state]), [[f.adapter.homeID, "IDLE"]]);
   assert.equal(f.latest().completed_sessions[0].session_id, "B");
 });
 
@@ -309,7 +374,7 @@ sys.exit(0 if FocusService(Processes(), [Desktop()]).focus(sys.argv[1]) else 1)`
   await assert.rejects(stat(socketPath), { code: "ENOENT" });
 });
 
-test("V2 empty terminal publishes zero sessions and V1 remains process-based", async () => {
+test("V2 fresh terminal publishes idle immediately and V1 remains process-based", async () => {
   const directory = await mkdtemp("/tmp/opencode/praefectus-v2-test-");
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
@@ -323,7 +388,9 @@ test("V2 empty terminal publishes zero sessions and V1 remains process-based", a
         data: { session: { root: (id) => id }, location: { model: { list: () => [] } } },
         ui: { router: { current: () => ({ type: "home" }) }, tabs: { enabled: () => false } } });
       const record = JSON.parse(fs.readFileSync(recordPath));
-      assert.equal(record.source_pid, process.pid); assert.deepEqual(record.sessions, []);
+      assert.equal(record.source_pid, process.pid); assert.equal(record.sessions.length, 1);
+      assert.equal(record.sessions[0].state, "IDLE");
+      assert.match(record.sessions[0].session_id, /^home:/);
       assert.ok(Number.isSafeInteger(record.process_start_ticks));
       await dispose(); assert.equal(fs.existsSync(recordPath), false);
       assert.equal(fs.readdirSync(process.env.XDG_RUNTIME_DIR + "/praefectus-opencode").length, 0);

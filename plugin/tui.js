@@ -18,6 +18,9 @@ export class TerminalStatusBridge {
     this.channel = null;
     this.navigationWarning = null;
     this.sequence = 0;
+    const builder = reporter.recordBuilder;
+    this.homeID = `home:${builder.processId}:${builder.processStartTicks ?? builder.processStartedAt}`;
+    this.homeOpen = false;
   }
 
   sessionIDs() {
@@ -34,9 +37,13 @@ export class TerminalStatusBridge {
   }
 
   navigate(command) {
-    if (this.disposed || command.server_id !== this.serverID ||
-        !this.known.has(command.session_id)) return false;
+    if (this.disposed || command.server_id !== this.serverID) return false;
     const { ui } = this.context;
+    if (command.session_id === this.homeID && this.homeOpen) {
+      ui.router.navigate({ type: "home" });
+      return true;
+    }
+    if (!this.known.has(command.session_id)) return false;
     if (ui.tabs.enabled()) ui.tabs.focus(command.session_id);
     else ui.router.navigate({ type: "session", sessionID: command.session_id });
     return true;
@@ -134,8 +141,16 @@ export class TerminalStatusBridge {
       }
     }
     const owner = this.reporter.recordBuilder.build(this.reporter.processStatus.decision, null);
+    this.homeOpen = this.context.ui.router.current().type === "home";
+    // The welcome screen has no server session until its first prompt. Give it
+    // a process-lifetime identity without syncing history or inventing status.
+    const home = this.homeOpen ? [{ ...owner, session_id: this.homeID,
+      state: "IDLE", attention: false, attention_since: null, preview: "idle",
+      server_id: this.serverID, tab_open: true,
+      session_created_at: owner.process_started_at,
+      navigation_socket: this.channel?.path ?? null }] : [];
     this.reporter.recordWriter.write({ ...owner, bridge_version: 2, server_id: this.serverID,
-      sessions: [...this.sessions.values()].map((entry) => entry.record).filter(Boolean),
+      sessions: [...this.sessions.values()].map((entry) => entry.record).filter(Boolean).concat(home),
       completed_sessions: [...this.completed.values()],
       warnings: [
         ...[...this.sessions].filter(([, entry]) => !entry.record)
