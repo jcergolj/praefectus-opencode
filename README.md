@@ -21,7 +21,7 @@
 | OpenCode | Latest tag | What gets tracked |
 | --- | --- | --- |
 | V1 — legacy build | [v5](https://github.com/jcergolj/praefectus-opencode/releases/tag/v5) | Terminal processes |
-| V2 — full-screen TUI | [v6](https://github.com/jcergolj/praefectus-opencode/releases/tag/v6) | Individual top-level sessions |
+| V2 — full-screen TUI | [v8](https://github.com/jcergolj/praefectus-opencode/releases/tag/v8) | Individual top-level sessions |
 
 **v6 also supports V1 1.18.29+.** Praefectus tag numbers are not OpenCode version numbers; **v5 is V1-only**.
 

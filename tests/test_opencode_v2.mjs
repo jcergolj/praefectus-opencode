@@ -274,9 +274,13 @@ test("cleanup waits for in-flight sync and does not write after disposal", async
   // Resolve server identity before the controlled session sync.
   await f.adapter.refresh(); f.records.length = 0;
   let release;
-  f.context.data.session.sync = () => new Promise((resolve) => { release = resolve; });
+  let started;
+  const syncing = new Promise((resolve) => { started = resolve; });
+  f.context.data.session.sync = () => new Promise((resolve) => { release = resolve; started(); });
   f.setTabs(["B"]);
-  const refreshing = f.adapter.refresh(); const disposing = f.adapter.dispose();
+  const refreshing = f.adapter.refresh();
+  await syncing;
+  const disposing = f.adapter.dispose();
   release(); await Promise.all([refreshing, disposing]);
   await f.adapter.refresh();
   assert.equal(f.records.length, 0); assert.equal(f.removed(), 1);
@@ -327,6 +331,54 @@ test("composed V2 trace independently notifies, deduplicates, and retains exact 
   const completed = decisions[7][0];
   assert.equal(f.adapter.navigate(JSON.parse(completed.focusTarget.slice(8))), true);
   assert.equal(f.navigation.at(-1), "B");
+});
+
+test("server restart refreshes identities so shared tabs count and finish only once", async () => {
+  const oldTerminal = fixture(), newTerminal = fixture(102, "restarted");
+  await oldTerminal.adapter.refresh();
+  const oldServerID = oldTerminal.adapter.serverID;
+  oldTerminal.context.client.server.info = newTerminal.context.client.server.info;
+  const frames = [];
+  for (const state of ["idle", "running", "idle"]) {
+    oldTerminal.states.set("A", state); newTerminal.states.set("A", state);
+    await oldTerminal.adapter.refresh(); await newTerminal.adapter.refresh();
+    frames.push([structuredClone(oldTerminal.latest()), structuredClone(newTerminal.latest())]);
+  }
+  const watcher = spawnSync("python3", [fileURLToPath(new URL("./notification_trace_snapshots.py", import.meta.url))], {
+    input: JSON.stringify(frames), encoding: "utf8",
+  });
+  assert.equal(watcher.status, 0, watcher.stderr);
+  const snapshots = JSON.parse(watcher.stdout);
+  assert.deepEqual(snapshots.map((s) => s.counts.sessions), [1, 1, 1]);
+  assert.notEqual(oldTerminal.adapter.serverID, oldServerID);
+  assert.equal(oldTerminal.adapter.serverID, newTerminal.adapter.serverID);
+  const policy = (await loadQmlScript("../NotificationPolicy.js")).create();
+  const decisions = snapshots.map((s) => plain(policy.accept(JSON.stringify(s), true).decisions));
+  assert.deepEqual(decisions.map((ds) => ds.map((d) => [d.eventType, d.sessionId])), [
+    [], [], [["finished", "A"]],
+  ]);
+  const target = JSON.parse(decisions[2][0].focusTarget.slice(8));
+  assert.equal(target.owners.length, 2);
+  assert.equal(oldTerminal.adapter.navigate({ ...target, server_id: oldServerID }), false);
+  assert.equal(oldTerminal.adapter.navigate(target), true);
+});
+
+test("server identity refresh updates retained completions and preserves records on disconnection", async () => {
+  const f = fixture();
+  f.states.set("A", "running"); await f.adapter.refresh();
+  f.setTabs([]); f.setRoute({ type: "home" }); f.states.delete("A");
+  await f.adapter.refresh();
+  const original = f.latest();
+  const completionID = original.completed_sessions[0].completion_id;
+  f.context.client.server.info = async () => { throw new Error("disconnected"); };
+  await f.adapter.refresh();
+  assert.equal(f.latest(), original);
+  f.context.client.server.info = fixture(102, "restarted").context.client.server.info;
+  await f.adapter.refresh();
+  assert.notEqual(f.latest().server_id, original.server_id);
+  assert.equal(f.latest().completed_sessions[0].server_id, f.latest().server_id);
+  assert.equal(f.latest().completed_sessions[0].completion_id, completionID);
+  assert.equal(f.latest().sessions[0].server_id, f.latest().server_id);
 });
 
 test("real Unix channel accepts watcher navigation and cleans up with the bridge", async () => {

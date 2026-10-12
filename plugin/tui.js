@@ -61,12 +61,13 @@ export class TerminalStatusBridge {
 
   async update() {
     const { data, client } = this.context;
-    if (!this.serverID) {
-      const info = await client.server.info();
-      this.serverID = createHash("sha256").update(JSON.stringify({
-        urls: [...info.urls].sort(), pid: info.pid, tmp: info.paths.tmp,
-      })).digest("hex");
-    }
+    // A long-lived TUI can reconnect to a restarted server. Never publish its
+    // sessions under the old identity alongside newer terminals' records.
+    const info = await client.server.info();
+    if (this.disposed) return;
+    this.serverID = createHash("sha256").update(JSON.stringify({
+      urls: [...info.urls].sort(), pid: info.pid, tmp: info.paths.tmp,
+    })).digest("hex");
     const ids = this.sessionIDs();
     for (const id of ids) {
       if (this.sessions.has(id)) continue;
@@ -150,8 +151,9 @@ export class TerminalStatusBridge {
       session_created_at: owner.process_started_at,
       navigation_socket: this.channel?.path ?? null }] : [];
     this.reporter.recordWriter.write({ ...owner, bridge_version: 2, server_id: this.serverID,
-      sessions: [...this.sessions.values()].map((entry) => entry.record).filter(Boolean).concat(home),
-      completed_sessions: [...this.completed.values()],
+      sessions: [...this.sessions.values()].map((entry) => entry.record).filter(Boolean)
+        .map((record) => ({ ...record, server_id: this.serverID })).concat(home),
+      completed_sessions: [...this.completed.values()].map((record) => ({ ...record, server_id: this.serverID })),
       warnings: [
         ...[...this.sessions].filter(([, entry]) => !entry.record)
           .map(([id]) => `Session ${id}: awaiting status bridge data`),
