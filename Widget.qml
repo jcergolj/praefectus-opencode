@@ -642,17 +642,51 @@ Panel {
               onClicked: root.setNotificationsEnabled(!root.notificationsEnabled)
             }
 
-            NumberField {
+            Text {
               width: parent.width
-              label: "Notification timeout (seconds)"
-              value: root.notificationTimeoutSeconds
-              from: 8
-              to: 30
-              stepSize: 1
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              fontSize: Style.font.bodySmall
-              onModified: root.setNotificationTimeout(value)
+              text: "Notification timeout (seconds)"
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            // Do not use NumberField/SpinBox or a text editor here: Qt can
+            // synchronously read foreign clipboard text even while hidden.
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Button {
+                width: Style.space(36)
+                text: "−"
+                enabled: root.notificationTimeoutSeconds > 8
+                foreground: enabled ? root.foreground : root.dim
+                fontFamily: root.fontFamily
+                fontSize: Style.font.bodySmall
+                onClicked: root.setNotificationTimeout(root.notificationTimeoutSeconds - 1)
+              }
+
+              Text {
+                width: Style.space(40)
+                anchors.verticalCenter: parent.verticalCenter
+                text: String(root.notificationTimeoutSeconds)
+                textFormat: Text.PlainText
+                horizontalAlignment: Text.AlignHCenter
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Button {
+                width: Style.space(36)
+                text: "+"
+                enabled: root.notificationTimeoutSeconds < 30
+                foreground: enabled ? root.foreground : root.dim
+                fontFamily: root.fontFamily
+                fontSize: Style.font.bodySmall
+                onClicked: root.setNotificationTimeout(root.notificationTimeoutSeconds + 1)
+              }
             }
 
             Text {
