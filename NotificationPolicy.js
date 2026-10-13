@@ -70,6 +70,8 @@ function create() {
           else if (previous && previous.state === "WORKING" && current.state === "IDLE") eventType = "finished"
           if (eventType) {
             var decision = { eventType: eventType, sessionId: sessionId, sourcePid: sourcePid }
+            if (typeof session.session_title === "string" && session.session_title)
+              decision.sessionTitle = session.session_title
             if (session.focus_target) decision.focusTarget = session.focus_target
             decisions.push(decision)
           }
@@ -89,8 +91,11 @@ function create() {
         completionIdentities[completionKey] = true
         if (currentSessions[completionKey]) continue
         if (notificationsEnabled && previousSessions !== null && !nextCompleted[completionKey]) {
-          decisions.push({ eventType: "finished", sessionId: completion.session_id,
-            sourcePid: String(completion.source_pid), focusTarget: completion.focus_target })
+          var completionDecision = { eventType: "finished", sessionId: completion.session_id,
+            sourcePid: String(completion.source_pid), focusTarget: completion.focus_target }
+          if (typeof completion.session_title === "string" && completion.session_title)
+            completionDecision.sessionTitle = completion.session_title
+          decisions.push(completionDecision)
         }
         nextCompleted[completionKey] = true
       }

@@ -6,13 +6,17 @@ function boundedTimeoutSeconds(value) {
 }
 
 function command(decision, watcherPath, timeoutSeconds) {
+  var title = typeof decision.sessionTitle === "string" ? decision.sessionTitle.trim() : ""
+  // Keep titles literal in notification markup and out of the helper's option parser.
+  var body = title ? "Session: " + title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    : "OpenCode session status changed"
   return [
     "omarchy-notification-send",
     "--app-name", "OpenCode",
     "--urgency", "normal",
     "--expire-time", String(boundedTimeoutSeconds(timeoutSeconds) * 1000),
     decision.eventType === "attention" ? "OpenCode session needs attention" : "OpenCode session finished",
-    "OpenCode session status changed",
+    body,
     "--exec", watcherPath,
     "--focus", decision.focusTarget || (decision.sourcePid !== "" ? decision.sourcePid : decision.sessionId)
   ]

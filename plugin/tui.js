@@ -131,6 +131,7 @@ export class TerminalStatusBridge {
       builder.updateContextUsage(assistant, model?.limit?.context);
       entry.record = { ...builder.build(status.decision, { type: "cli.snapshot" }),
         server_id: this.serverID, tab_open: open.has(id),
+        session_title: session?.title ?? null,
         session_created_at: session?.time?.created ?? builder.processStartedAt,
         navigation_socket: this.channel?.path ?? null };
       if (open.has(id)) this.completed.delete(id);

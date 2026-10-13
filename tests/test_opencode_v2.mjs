@@ -333,6 +333,49 @@ test("composed V2 trace independently notifies, deduplicates, and retains exact 
   assert.equal(f.navigation.at(-1), "B");
 });
 
+test("V2 session titles reach attention, open completion, and closed completion notifications", async () => {
+  const f = fixture();
+  const session = f.context.data.session.get("A");
+  session.title = "Original title";
+  const frames = [];
+  async function capture() {
+    await f.adapter.refresh();
+    frames.push([structuredClone(f.latest())]);
+  }
+  await capture();
+  f.permissions.set("A", [{ id: "per_A", action: "edit" }]); await capture();
+  f.permissions.delete("A"); f.states.set("A", "running"); await capture();
+  session.title = "Renamed <session> & title";
+  f.states.delete("A"); await capture();
+  f.states.set("A", "running"); await capture();
+  f.setTabs([]); f.setRoute({ type: "home" }); await capture();
+  f.states.delete("A"); await capture();
+  await capture();
+  assert.equal(f.latest().completed_sessions[0].session_title, session.title);
+
+  const watcher = spawnSync("python3", [fileURLToPath(new URL("./notification_trace_snapshots.py", import.meta.url))], {
+    input: JSON.stringify(frames), encoding: "utf8",
+  });
+  assert.equal(watcher.status, 0, watcher.stderr);
+  const snapshots = JSON.parse(watcher.stdout);
+  assert.equal(snapshots[0].sessions[0].session_title, "Original title");
+  assert.equal(snapshots[3].sessions[0].session_title, session.title);
+  assert.equal(snapshots[6].completed_sessions[0].session_title, session.title);
+  const policy = (await loadQmlScript("../NotificationPolicy.js")).create();
+  const delivery = await loadQmlScript("../NotificationDelivery.js");
+  const decisions = snapshots.map((snapshot) => plain(policy.accept(JSON.stringify(snapshot), true).decisions));
+  assert.deepEqual(decisions.map((ds) => ds.map((d) => [d.eventType, d.sessionTitle])), [
+    [], [["attention", "Original title"]], [], [["finished", session.title]],
+    [], [], [["finished", session.title]], [],
+  ]);
+  for (const decision of decisions.flat()) {
+    const command = plain(delivery.command(decision, "/watcher", 10));
+    assert.equal(command[8], decision.eventType === "attention" ? "Session: Original title"
+      : "Session: Renamed &lt;session&gt; &amp; title");
+    assert.equal(command.at(-1), decision.focusTarget);
+  }
+});
+
 test("server restart refreshes identities so shared tabs count and finish only once", async () => {
   const oldTerminal = fixture(), newTerminal = fixture(102, "restarted");
   await oldTerminal.adapter.refresh();

@@ -66,6 +66,7 @@ class SessionFactory:
             context_tokens=status_record.get("context_tokens"),
             context_limit=status_record.get("context_limit"),
             context_percentage=status_record.get("context_percentage"),
+            session_title=status_record.get("session_title"),
         )
 
 

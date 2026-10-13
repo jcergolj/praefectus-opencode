@@ -78,6 +78,7 @@ class Session:
     context_limit: Any = None
     context_percentage: Any = None
     focus_target: Optional[str] = None
+    session_title: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         record = {
@@ -100,6 +101,8 @@ class Session:
         }
         if self.focus_target is not None:
             record["focus_target"] = self.focus_target
+        if isinstance(self.session_title, str) and self.session_title:
+            record["session_title"] = self.session_title
         return record
 
 
