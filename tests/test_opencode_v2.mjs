@@ -333,7 +333,7 @@ test("composed V2 trace independently notifies, deduplicates, and retains exact 
   assert.equal(f.navigation.at(-1), "B");
 });
 
-test("V2 session titles reach attention, open completion, and closed completion notifications", async () => {
+test("V2 session titles stay in private snapshots, not attention or completion notification arguments", async () => {
   const f = fixture();
   const session = f.context.data.session.get("A");
   session.title = "Original title";
@@ -364,14 +364,15 @@ test("V2 session titles reach attention, open completion, and closed completion 
   const policy = (await loadQmlScript("../NotificationPolicy.js")).create();
   const delivery = await loadQmlScript("../NotificationDelivery.js");
   const decisions = snapshots.map((snapshot) => plain(policy.accept(JSON.stringify(snapshot), true).decisions));
-  assert.deepEqual(decisions.map((ds) => ds.map((d) => [d.eventType, d.sessionTitle])), [
-    [], [["attention", "Original title"]], [], [["finished", session.title]],
-    [], [], [["finished", session.title]], [],
+  assert.deepEqual(decisions.map((ds) => ds.map((d) => d.eventType)), [
+    [], ["attention"], [], ["finished"],
+    [], [], ["finished"], [],
   ]);
   for (const decision of decisions.flat()) {
+    assert.equal(Object.hasOwn(decision, "sessionTitle"), false);
     const command = plain(delivery.command(decision, "/watcher", 10));
-    assert.equal(command[8], decision.eventType === "attention" ? "Session: Original title"
-      : "Session: Renamed &lt;session&gt; &amp; title");
+    assert.equal(command[8], "OpenCode session status changed");
+    assert.equal(command.some((argument) => /Original title|Renamed/.test(argument)), false);
     assert.equal(command.at(-1), decision.focusTarget);
   }
 });

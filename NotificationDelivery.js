@@ -6,17 +6,15 @@ function boundedTimeoutSeconds(value) {
 }
 
 function command(decision, watcherPath, timeoutSeconds) {
-  var title = typeof decision.sessionTitle === "string" ? decision.sessionTitle.trim() : ""
-  // Keep titles literal in notification markup and out of the helper's option parser.
-  var body = title ? "Session: " + title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    : "OpenCode session status changed"
+  // Helper and downstream busctl arguments are visible through procfs.
+  // Keep private session text out of argv, even when supplied by a caller.
   return [
     "omarchy-notification-send",
     "--app-name", "OpenCode",
     "--urgency", "normal",
     "--expire-time", String(boundedTimeoutSeconds(timeoutSeconds) * 1000),
     decision.eventType === "attention" ? "OpenCode session needs attention" : "OpenCode session finished",
-    body,
+    "OpenCode session status changed",
     "--exec", watcherPath,
     "--focus", decision.focusTarget || (decision.sourcePid !== "" ? decision.sourcePid : decision.sessionId)
   ]

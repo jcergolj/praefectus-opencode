@@ -14,14 +14,14 @@
 - **Fresh welcome screens count as idle immediately**, before the first prompt creates a session.
 - **No duplicate counting** when a session is open in multiple terminals. Subagents are excluded.
 - **Closed working tabs stay visible** until completion, including while awaiting attention.
-- **Clickable notifications** for attention and completion, including the V2 session title when available. Startup is silent; settings control enablement, colors, and notification timeout (8–30 seconds).
+- **Clickable notifications** for attention and completion, using generic text to keep session titles private. Startup is silent; settings control enablement, colors, and notification timeout (8–30 seconds).
 
 ## Compatibility
 
 | OpenCode | Latest tag | What gets tracked |
 | --- | --- | --- |
 | V1 — legacy build | [v5](https://github.com/jcergolj/praefectus-opencode/releases/tag/v5) | Terminal processes |
-| V2 — full-screen TUI | [v10](https://github.com/jcergolj/praefectus-opencode/releases/tag/v10) | Individual top-level sessions |
+| V2 — full-screen TUI | [v11](https://github.com/jcergolj/praefectus-opencode/releases/tag/v11) | Individual top-level sessions |
 
 **v6 also supports V1 1.18.29+.** Praefectus tag numbers are not OpenCode version numbers; **v5 is V1-only**.
 
@@ -131,6 +131,8 @@ Inspect the current snapshot:
 ```
 
 **Privacy:** uses public OpenCode APIs, not terminal scraping or private storage. Runtime records live in `$XDG_RUNTIME_DIR/praefectus-opencode/` (fallback: `~/.cache/praefectus-opencode/`). Process-lifetime checks prevent stale PID reuse.
+
+Automatic notifications omit session titles, project names, and previews: notification helper command arguments can be read by other local users through procfs. Notifications still carry the focus target needed to open the associated session.
 
 ## Uninstall
 
