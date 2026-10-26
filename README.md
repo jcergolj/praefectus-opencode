@@ -92,8 +92,8 @@ o.bind("SUPER + ALT + W", "OpenCode: working", watcher .. " --focus-state workin
 o.bind("SUPER + ALT + R", "OpenCode: response", watcher .. " --focus-state response")
 o.bind("SUPER + ALT + P", "OpenCode: permission", watcher .. " --focus-state permission")
 o.bind("SUPER + ALT + I", "OpenCode: idle", watcher .. " --focus-state idle")
-o.bind("SUPER + ALT + TAB", "OpenCode: next", watcher .. " --focus-next")
-o.bind("SUPER + ALT + SHIFT + TAB", "OpenCode: previous", watcher .. " --focus-previous")
+o.bind("SUPER + ALT + T", "OpenCode: next", watcher .. " --focus-next")
+o.bind("SUPER + ALT + SHIFT + T", "OpenCode: previous", watcher .. " --focus-previous")
 ```
 
 Repeated presses cycle through matching sessions, including V2 tabs in the same terminal.
